@@ -1,0 +1,67 @@
+# EXAMPLE for the repository of the site being deployed (not for qa-analyzer itself).
+# Copy it into the site repository and replace the placeholders.
+#
+# Flow: develop -> deploy to staging -> QA verify (full mode)
+#       main    -> deploy to production -> QA verify (read-only mode)
+#
+# Why a stage: Bitbucket allows only one step per environment to declare
+# `deployment:`. A stage carries the deployment for all of its steps, so the
+# Deploy step and the QA verify step both get the environment's variables, and
+# qa-analyzer reads the environment from BITBUCKET_DEPLOYMENT_ENVIRONMENT.
+#
+# Where to put the variables:
+#   Repository settings > Deployments > <staging|production> (deployment variables):
+#     TARGET_BASE_URL            base URL of that environment, e.g. https://staging.example.com
+#     TEST_USER, TEST_PASSWORD   (secured) only when QA_AUTH_MODE=form
+#     QA_READY_URL               optional health/version URL that reports the deployed commit
+#   Repository settings > Repository variables:
+#     JIRA_BASE_URL, JIRA_EMAIL
+#     JIRA_API_TOKEN             (secured)
+#     ANTHROPIC_API_KEY          (secured)
+#     JIRA_AC_FIELD, QA_AUTH_MODE, QA_LOGIN_*, QA_READONLY_ALLOW, QA_READONLY_ALLOW_HOSTS (optional)
+#
+# Security: the QA step executes AI-generated test code. Keep it in its own step
+# and container, and do not expose deployment credentials (cloud keys, SSH keys)
+# to it. qa-analyzer also strips credential variables from the test process.
+
+image: atlassian/default-image:4
+
+definitions:
+  steps:
+    - step: &qa-verify
+        name: QA verify
+        # Build and push the qa-analyzer Dockerfile to your registry first.
+        image:
+          name: your-registry.example.com/qa-analyzer:0.1.0
+          # username: $REGISTRY_USER
+          # password: $REGISTRY_PASSWORD
+        max-time: 30
+        script:
+          # --fail-on not-resolved (default): fail the pipeline only on NOT_RESOLVED
+          # or on a setup problem. Use --fail-on never to report without failing.
+          - node /app/dist/cli/main.js verify --output-dir qa-report --fail-on not-resolved
+        artifacts:
+          - qa-report/**
+
+pipelines:
+  branches:
+    develop:
+      - stage:
+          name: Staging
+          deployment: staging
+          steps:
+            - step:
+                name: Deploy
+                script:
+                  - echo "Replace with your staging deployment command"
+            - step: *qa-verify
+    main:
+      - stage:
+          name: Production
+          deployment: production
+          steps:
+            - step:
+                name: Deploy
+                script:
+                  - echo "Replace with your production deployment command"
+            - step: *qa-verify

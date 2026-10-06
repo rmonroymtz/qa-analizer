@@ -1,0 +1,15 @@
+node_modules
+dist
+qa-report
+test-results
+playwright-report
+.auth
+.env
+.env.*
+!.env.example
+.git
+.atl
+odd
+tests
+coverage
+*.log
