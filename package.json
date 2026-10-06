@@ -1,0 +1,27 @@
+{
+  "name": "qa-analyzer",
+  "version": "0.1.0",
+  "description": "Post-deploy QA verification of Jira tickets with AI-generated Playwright tests",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "qa-analyzer": "dist/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@playwright/test": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
