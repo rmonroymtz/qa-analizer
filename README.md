@@ -76,7 +76,14 @@ qa-analyzer verify [options]
 | `inconclusive` | 0 | 1 | 2 | 2 |
 | `never` | 0 | 0 | 0 | 0 |
 
-A configuration error (missing or invalid variables) always exits 2 and prints every issue. A "setup problem" is a 401/403 from Jira or Claude, or a failed login: a broken setup should not look green.
+A configuration error (missing or invalid variables) always exits 2 and prints every issue. A "setup problem" is any of these, because a broken setup should not look green:
+
+- No ticket key could be resolved (no Jira comment is posted).
+- An invalid explicit ticket key.
+- A failed login.
+- A 400, 401, 403, 404 or 429 response from Jira (reading the ticket) or from Claude (generating the tests): a bad request or model id, bad credentials, a ticket that does not exist, or an exhausted quota or rate limit.
+
+Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on never` always exits 0.
 
 ## Environment variables
 

@@ -12,6 +12,8 @@ describe('runCli', () => {
     const { captured, io: cliIo } = io();
     expect(await runCli(argv, {}, cliIo)).toBe(0);
     expect(captured.out).toContain('Usage:');
+    expect(captured.out).toContain('ticket key not found');
+    expect(captured.err).toBe('');
   });
 
   it('prints every config issue and exits 2 without environment', async () => {
@@ -20,6 +22,8 @@ describe('runCli', () => {
     expect(captured.err).toContain('TARGET_BASE_URL is required');
     expect(captured.err).toContain('JIRA_API_TOKEN is required');
     expect(captured.err).toContain('environment is required');
+    expect(captured.err).toContain('Run "qa-analyzer --help" for usage.');
+    expect(captured.out).toBe('');
   });
 });
 
@@ -43,11 +47,43 @@ describe('formatHumanSummary', () => {
       timings: { startedAt: '', durationMs: 1, steps: {} },
     } as VerificationReport;
     const text = formatHumanSummary(report, '/out/report.json', 1);
-    expect(text).toContain('QA verification: NOT_RESOLVED');
-    expect(text).toContain('SHOP-42 (from branch)');
-    expect(text).toContain('[FAILED] AC-2 — price is discounted');
-    expect(text).not.toContain('more');
-    expect(text).toContain('Report: /out/report.json');
-    expect(text).toContain('Exit code: 1');
+    // Only the first line of a multi-line reason is shown.
+    expect(text).toBe(
+      [
+        'QA verification: NOT_RESOLVED',
+        'Ticket: SHOP-42 (from branch) — Badge',
+        'Environment: staging (full) at https://shop.example.com',
+        'Reason: 1 of 2 criteria passed, 1 failed, 0 inconclusive',
+        '  [PASSED] AC-1 — test passed',
+        '  [FAILED] AC-2 — price is discounted',
+        'Jira comment: posted',
+        'Report: /out/report.json',
+        'Exit code: 1',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('explains why no comment was posted and when the report was not written', () => {
+    const report = {
+      verdict: 'INCONCLUSIVE',
+      reason: 'ticket key not found',
+      configError: true,
+      ticket: null,
+      environment: 'production',
+      policyMode: 'read-only',
+      targetBaseUrl: 'https://shop.example.com',
+      commit: null,
+      pagesInspected: [],
+      results: [],
+      comment: { posted: false, skippedReason: 'no ticket to comment on' },
+      timings: { startedAt: '', durationMs: 1, steps: {} },
+    } as VerificationReport;
+    const lines = formatHumanSummary(report, undefined, 2).split('\n');
+    expect(lines).toContain('Ticket: not found');
+    expect(lines).toContain('Jira comment: not posted (no ticket to comment on)');
+    expect(lines).toContain('Report: not written');
+    expect(lines).toContain('Exit code: 2');
+    expect(lines.filter((line) => line.startsWith('  ['))).toEqual([]);
   });
 });

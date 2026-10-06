@@ -123,10 +123,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * API statuses that point at the setup, not at the site under test: a bad request
+ * or model id (400), bad or missing credentials (401/403), a missing ticket or
+ * endpoint (404), and an exhausted quota or rate limit (429).
+ */
+const SETUP_STATUSES = new Set([400, 401, 403, 404, 429]);
+
 function isConfigFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const status = (error as { status?: unknown }).status;
-  return error.name === 'LoginError' || status === 401 || status === 403;
+  return error.name === 'LoginError' || (typeof status === 'number' && SETUP_STATUSES.has(status));
 }
 
 function redactText(text: string, secrets: string[]): string {
@@ -274,7 +281,8 @@ export class VerifyTicketUseCase {
     const resolved =
       resolve({ ...candidates, commitMessage: request.commitMessage }) ??
       (request.commitMessage === undefined ? resolve({ ...candidates, commitMessage: await deps.readHeadCommitMessage() }) : null);
-    if (resolved === null) throw new StepFailure('ticket key not found', false, false);
+    // Without a key there is nothing to verify or comment on: a pipeline setup problem.
+    if (resolved === null) throw new StepFailure('ticket key not found', false, true);
     state.key = resolved.key;
     state.keySource = resolved.source;
     deps.reporter.log(`Ticket ${resolved.key} (from ${resolved.source})`);
@@ -337,7 +345,10 @@ export class VerifyTicketUseCase {
     shouldComment: boolean,
     state: RunState,
   ): Promise<VerificationReport['comment']> {
-    if (!shouldComment || report.ticket === null) return { posted: false, skippedReason: report.verdict === 'RESOLVED' ? 'verdict is RESOLVED' : 'no ticket to comment on' };
+    if (report.verdict === 'RESOLVED') return { posted: false, skippedReason: 'verdict is RESOLVED' };
+    if (report.ticket === null) return { posted: false, skippedReason: 'no ticket to comment on' };
+    // The only non-commenting failure with a known key is a ticket Jira could not return.
+    if (!shouldComment) return { posted: false, skippedReason: 'the ticket could not be read' };
     if (request.dryRun) return { posted: false, skippedReason: 'dry run' };
     if (!request.comment) return { posted: false, skippedReason: 'comments disabled (--no-comment)' };
     const attachments = report.results

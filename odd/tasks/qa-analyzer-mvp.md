@@ -41,6 +41,8 @@ Manual verification of deployed tickets is slow and inconsistent. AI-generated t
 - [x] T6 — VerifyTicket use case + CLI wiring + exit codes + report + Jira comment composition. Route: delegated.
 - [x] T7 — Dockerfile, `bitbucket-pipelines.yml` example, README. Route: delegated.
 - [x] T8 — Hardening from the independent T1–T3 verification. Fixes: every AC must have a result in `aggregateVerdict`; the form login must require a success signal; read-only must allow only GET/HEAD/OPTIONS and block service workers and WebSockets; stricter ticket-key matching; an invalid explicit `--ticket` must fail; Jira credentials must use private fields; nested config redaction; no empty ADF text nodes; the guard must throw on a bad base URL; stricter short-SHA matching. Route: delegated (multi-file). Reason: verifier findings, user-authorized scope (correctness of the existing tasks).
+- [ ] T9 — Fixes from the independent T4–T7 verification that do not depend on the isolation design. Exit codes: a missing ticket key and Anthropic/Jira 400/404/429 errors become config-level (exit 2). No traces in authenticated or read-only runs. Reject duplicate or overlapping criterion ids. `test.fail`/`test.fixme` must not count as PASSED. No retries in full mode. Kill the process group on timeout. Tighten the weak tests. Route: delegated.
+- [ ] T10 — Isolate the AI-generated test execution: the read-only guard must not be removable by generated code (page.route precedence, page.request, browser.newContext), and secrets must not be exfiltrated (/proc/<ppid>/environ, regex-check bypass). Design: **pending user decision** (declarative plan interpreted by the parent vs. sandboxed code execution). Route: delegated.
 
 ## Acceptance criteria
 

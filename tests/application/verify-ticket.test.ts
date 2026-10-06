@@ -139,7 +139,7 @@ describe('VerifyTicketUseCase', () => {
     expect(outcome.report.ticket).toMatchObject({ key: 'SHOP-42', keySource: 'explicit', summary: 'Sale badge' });
     expect(outcome.report.commit).toBe('abc1234def');
     expect(outcome.report.results).toEqual(passed);
-    expect(outcome.report.comment).toMatchObject({ posted: false });
+    expect(outcome.report.comment).toEqual({ posted: false, skippedReason: 'verdict is RESOLVED' });
     expect(h.comments).toHaveLength(0);
     expect(h.written).toHaveLength(1);
     expect(h.storageStates).toEqual([undefined]);
@@ -161,14 +161,14 @@ describe('VerifyTicketUseCase', () => {
   });
 
   it.each([
-    ['dry run', { dryRun: true }],
-    ['--no-comment', { comment: false }],
-  ])('does not comment on %s', async (_label, request) => {
+    ['dry run', { dryRun: true }, 'dry run'],
+    ['--no-comment', { comment: false }, 'comments disabled (--no-comment)'],
+  ])('does not comment on %s', async (_label, request, skippedReason) => {
     const h = harness({}, { results: failedWithShots(1) });
     const outcome = await verify(h, request);
     expect(outcome.report.verdict).toBe('NOT_RESOLVED');
     expect(h.comments).toHaveLength(0);
-    expect(outcome.report.comment.skippedReason).toBeDefined();
+    expect(outcome.report.comment).toEqual({ posted: false, skippedReason });
   });
 
   it('a comment failure is logged and does not change the verdict', async () => {
@@ -203,13 +203,15 @@ describe('VerifyTicketUseCase', () => {
     const outcome = await verify(h, { explicitTicket: 'not a key', branch: 'feature/SHOP-7-x' });
     expect(outcome.report).toMatchObject({ verdict: 'INCONCLUSIVE', ticket: null, configError: true });
     expect(outcome.report.reason).toContain('Invalid ticket key');
+    expect(outcome.report.comment).toEqual({ posted: false, skippedReason: 'no ticket to comment on' });
     expect(h.comments).toHaveLength(0);
   });
 
-  it('INCONCLUSIVE without a comment when no ticket key is found', async () => {
+  it('INCONCLUSIVE as a setup error, without a comment, when no ticket key is found', async () => {
     const h = harness();
     const outcome = await verify(h, { explicitTicket: undefined });
-    expect(outcome.report).toMatchObject({ verdict: 'INCONCLUSIVE', reason: 'ticket key not found', ticket: null, configError: false });
+    expect(outcome.report).toMatchObject({ verdict: 'INCONCLUSIVE', reason: 'ticket key not found', ticket: null, configError: true });
+    expect(outcome.report.comment).toEqual({ posted: false, skippedReason: 'no ticket to comment on' });
     expect(h.comments).toHaveLength(0);
     expect(h.written).toHaveLength(1);
   });
@@ -222,14 +224,22 @@ describe('VerifyTicketUseCase', () => {
     expect(h.comments).toHaveLength(1);
   });
 
-  it('INCONCLUSIVE without a comment when Jira cannot return the ticket', async () => {
-    const error = Object.assign(new Error('Jira request GET returned 401'), { status: 401 });
+  it.each([400, 401, 403, 404, 429])('INCONCLUSIVE setup error without a comment when Jira returns %i for the ticket', async (status) => {
+    const error = Object.assign(new Error(`Jira request GET returned ${status}`), { name: 'JiraError', status });
     const h = harness({ tickets: { getTicket: async () => { throw error; } } });
     const outcome = await verify(h);
     expect(outcome.report.verdict).toBe('INCONCLUSIVE');
     expect(outcome.report.reason).toContain('could not read ticket');
     expect(outcome.report.configError).toBe(true);
+    expect(outcome.report.comment).toEqual({ posted: false, skippedReason: 'the ticket could not be read' });
     expect(h.comments).toHaveLength(0);
+  });
+
+  it('a Jira server error reading the ticket is not a setup error', async () => {
+    const error = Object.assign(new Error('Jira request GET returned 503'), { name: 'JiraError', status: 503 });
+    const h = harness({ tickets: { getTicket: async () => { throw error; } } });
+    const outcome = await verify(h);
+    expect(outcome.report).toMatchObject({ verdict: 'INCONCLUSIVE', configError: false });
   });
 
   it('INCONCLUSIVE with a comment when the ticket has no acceptance criteria', async () => {
@@ -286,7 +296,23 @@ describe('VerifyTicketUseCase', () => {
     const outcome = await verify(h);
     expect(outcome.report.verdict).toBe('INCONCLUSIVE');
     expect(outcome.report.reason).toContain('test generation failed');
+    expect(outcome.report.configError).toBe(false);
+    expect(outcome.report.comment).toEqual({ posted: true });
     expect(h.comments).toHaveLength(1);
+  });
+
+  it.each([400, 401, 403, 404, 429])('flags a Claude API %i during generation as a setup error', async (status) => {
+    const error = Object.assign(new Error(`Claude request failed: ${status}`), { name: 'GenerationError', status });
+    const h = harness({ generator: { generate: async () => { throw error; } } });
+    const outcome = await verify(h);
+    expect(outcome.report).toMatchObject({ verdict: 'INCONCLUSIVE', configError: true });
+    expect(outcome.report.reason).toContain('test generation failed');
+  });
+
+  it('a Claude server overload during generation is not a setup error', async () => {
+    const error = Object.assign(new Error('Claude request failed: overloaded'), { name: 'GenerationError', status: 529 });
+    const h = harness({ generator: { generate: async () => { throw error; } } });
+    expect((await verify(h)).report.configError).toBe(false);
   });
 
   it('never crashes: an unexpected error becomes a redacted INCONCLUSIVE report', async () => {

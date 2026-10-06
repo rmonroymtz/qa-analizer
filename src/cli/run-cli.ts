@@ -33,7 +33,8 @@ Options:
   -h, --help             Show this help
 
 Exit codes (--fail-on not-resolved): 0 RESOLVED or INCONCLUSIVE, 1 NOT_RESOLVED,
-2 configuration error or INCONCLUSIVE caused by setup (credentials, login).
+2 configuration error or INCONCLUSIVE caused by setup: ticket key not found, failed login,
+or a Jira/Claude 400, 401, 403, 404 or 429 response.
 --fail-on inconclusive: 0 RESOLVED, 1 NOT_RESOLVED, 2 INCONCLUSIVE. --fail-on never: always 0.
 
 Required environment: TARGET_BASE_URL, JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN,
