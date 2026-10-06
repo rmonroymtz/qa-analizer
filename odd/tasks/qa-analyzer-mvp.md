@@ -34,7 +34,7 @@ Manual verification of deployed tickets is slow and inconsistent. AI-generated t
 ## Tasks
 
 - [x] T1 — Scaffold + domain + config + ticket key resolution (TS project, vitest, Verdict/Ticket/AcceptanceCriterion, env/CLI config parsing, ticket key resolver). Route: delegated (2+ non-trivial files).
-- [ ] T2 — Jira adapter (fetch issue, ADF→text, AC field from `JIRA_AC_FIELD` or description, comment in ADF, attach screenshot). Route: delegated.
+- [x] T2 — Jira adapter (fetch issue, ADF→text, AC field from `JIRA_AC_FIELD` or description, comment in ADF, attach screenshot). Route: delegated.
 - [ ] T3 — Playwright inspector + auth setup + production read-only guard + readiness wait. Route: delegated.
 - [ ] T4 — Claude test generator (prompt with ticket + aria snapshot + env policy, structured output → spec code + criterion mapping). Route: delegated.
 - [ ] T5 — Playwright runner + result classifier (assertion failure vs locator/timeout → verdict per criterion). Route: delegated.
@@ -53,8 +53,10 @@ Manual verification of deployed tickets is slow and inconsistent. AI-generated t
 
 ## Progress / Evidence
 
-- T1 (delegated writer): scaffold (TS 7 strict ESM/NodeNext, vitest 5), domain (Verdict, Ticket, CriterionResult, EnvironmentPolicy), ports, `loadConfig` + `redactConfig`, `resolveTicketKey`, `readHeadCommitMessage`. RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 38/38 pass; `npm run build` pass. Commit: see `git log` (feat: scaffold project with domain, config and ticket key resolution).
+- T1 (delegated writer): scaffold (TS 7 strict ESM/NodeNext, vitest 5), domain (Verdict, Ticket, CriterionResult, EnvironmentPolicy), ports, `loadConfig` + `redactConfig`, `resolveTicketKey`, `readHeadCommitMessage`. RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 38/38 pass; `npm run build` pass. Commit: `e1189de` feat: scaffold project with domain, config and ticket key resolution.
+
+- T2 (delegated writer): `JiraClient` (basic auth, injectable fetch, `JiraError` with status, credentials scrubbed), `adfToText`, `extractAcceptanceCriteria` (custom field ADF/string, description heading/paragraph label in EN/ES, plain-text fallback), `buildVerificationCommentAdf`, `JiraTicketRepository`, `JiraTicketCommenter` (attachments first; upload failures reported in the comment). RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 64/64 pass; `npm run build` pass. Commit: feat(jira): add Jira ticket repository and verification commenter.
 
 ## Next step
 
-T2.
+T3.
