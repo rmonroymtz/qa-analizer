@@ -152,7 +152,7 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 ## Known limitations
 
 - **Single snapshot.** Claude sees each page once, before any interaction. Elements that appear only after clicks or navigation are not in the snapshot, so tests for them are more likely to be INCONCLUSIVE.
-- **AI-generated code runs in CI.** The spec passes a static check (only the fixtures import; no `require`, `process.env`, child processes or dynamic imports) and runs without credential variables, but it is still model-written code. Run it in an isolated container, in its own step, with no extra secrets.
+- **AI-generated code runs in CI.** The spec passes a static check (only the fixtures import; no `require`, `process.env`, child processes, dynamic imports, `test.only`, `test.fail` or `test.fixme`; every criterion id at most once) and runs without credential variables, but it is still model-written code. Run it in an isolated container, in its own step, with no extra secrets.
 - **One ticket per run.** Only the main ticket of the deploy is verified.
 - **Up to three pages** are inspected: the start page and two same-host pages mentioned in the ticket.
 - **Read-only covers the browser.** Mutations made by the site's own servers as a side effect of a GET are outside the guard's reach.

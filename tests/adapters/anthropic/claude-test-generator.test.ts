@@ -55,6 +55,32 @@ describe('validateGeneratedSuite', () => {
     expect(() => validateGeneratedSuite(suite, ticket)).toThrow(/AC-9/);
   });
 
+  it.each([
+    [
+      'within criteria',
+      {
+        criteria: [
+          { criterionId: 'AC-1', testTitle: '[AC-1] Badge shown' },
+          { criterionId: 'AC-1', testTitle: '[AC-1] Badge shown again' },
+        ],
+      },
+    ],
+    [
+      'within uncoverable',
+      {
+        uncoverable: [
+          { criterionId: 'AC-2', reason: 'mutates data' },
+          { criterionId: 'AC-2', reason: 'needs a payment' },
+        ],
+      },
+    ],
+    ['in both criteria and uncoverable', { uncoverable: [...validSuite.uncoverable, { criterionId: 'AC-1', reason: 'also not coverable' }] }],
+  ])('rejects duplicate criterion ids %s', (_label, overrides) => {
+    const suite = { ...validSuite, ...overrides };
+    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(GenerationError);
+    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(/duplicate criterion ids: AC-\d/);
+  });
+
   it('requires the qa-fixtures import', () => {
     const suite = { ...validSuite, specCode: SPEC.replace("import { test, expect } from './qa-fixtures';", '') };
     expect(() => validateGeneratedSuite(suite, ticket)).toThrow(/qa-fixtures/);
@@ -67,9 +93,19 @@ describe('validateGeneratedSuite', () => {
     ['dynamic import', "const m = await import('node:fs');"],
     ['other import', "import fs from 'node:fs';"],
     ['playwright import', "import { test } from '@playwright/test';"],
+    ['test.fail', "test.fail('[AC-1] expected to fail', async () => {});"],
+    ['test.fixme', "test.fixme('[AC-1] later', async () => {});"],
+    ['test.only', "test.only('[AC-1] focused', async () => {});"],
+    ['test.describe.only', "test.describe.only('focused', () => {});"],
+    ['test.fail() inside a test', '  test.fail();'],
   ])('rejects unsafe spec code: %s', (_label, line) => {
     const suite = { ...validSuite, specCode: `${SPEC}\n${line}` };
     expect(() => validateGeneratedSuite(suite, ticket)).toThrow(GenerationError);
+  });
+
+  it('allows test.skip, which the result classifier reports as INCONCLUSIVE', () => {
+    const suite = { ...validSuite, specCode: `${SPEC}\ntest.skip('[AC-1] skipped', async () => {});` };
+    expect(validateGeneratedSuite(suite, ticket).specCode).toContain('test.skip');
   });
 
   it('accepts the import with double quotes and no semicolon', () => {

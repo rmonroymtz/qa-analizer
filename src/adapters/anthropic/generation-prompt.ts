@@ -13,6 +13,7 @@ You receive a ticket with numbered acceptance criteria, the environment policy, 
 Rules for the spec code:
 1. The first line must be exactly: ${FIXTURES_IMPORT}
    Import nothing else. Do not use require(), dynamic import(), process.env, the file system, or child processes.
+   Do not use test.only, test.fail, test.fixme or test.skip.
 2. Write one test() per acceptance criterion you can verify. Title each test "[AC-n] <short description>", where AC-n is the criterion id exactly as given (for example "[AC-1] Sale badge is visible").
 3. Use only locators grounded in the provided aria snapshots. Prefer page.getByRole(...), page.getByLabel(...) and page.getByText(...) with the accessible names that appear in the snapshots. Never invent CSS ids, classes, test ids, or XPath.
 4. Navigate with relative URLs only (for example await page.goto('/products')); baseURL is already configured.

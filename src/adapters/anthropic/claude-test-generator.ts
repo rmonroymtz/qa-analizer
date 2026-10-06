@@ -37,6 +37,11 @@ const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 const FIXTURES_IMPORT_LINE = /^\s*import\s*\{\s*test\s*,\s*expect\s*\}\s*from\s*(['"])\.\/qa-fixtures\1\s*;?\s*$/;
 const FORBIDDEN_TOKENS = ['require(', 'child_process', 'process.env'];
+/**
+ * Modifiers that change what a passing run means (`fail`, `fixme`) or silently
+ * drop other tests (`only`), including the `test.describe.*` variants.
+ */
+const FORBIDDEN_MODIFIER = /\btest\s*(?:\.\s*describe\s*)?\.\s*(fail|fixme|only)\b/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -57,6 +62,8 @@ function checkSpecSafety(specCode: string): void {
   for (const token of FORBIDDEN_TOKENS) {
     if (specCode.includes(token)) throw new GenerationError(`Generated spec rejected: it contains "${token}"`);
   }
+  const modifier = specCode.match(FORBIDDEN_MODIFIER);
+  if (modifier) throw new GenerationError(`Generated spec rejected: it uses test.${modifier[1]}`);
   if (/\bimport\s*\(/.test(specCode)) throw new GenerationError('Generated spec rejected: it contains a dynamic import()');
   const importLines = specCode.split('\n').filter((line) => /^\s*import\b/.test(line));
   const foreign = importLines.find((line) => !FIXTURES_IMPORT_LINE.test(line));
@@ -65,8 +72,9 @@ function checkSpecSafety(specCode: string): void {
 }
 
 /**
- * Checks the parsed model output: shape, criterion coverage (every id exactly
- * accounted for, no unknown ids) and the static safety rules.
+ * Checks the parsed model output: shape, criterion coverage (every id accounted
+ * for exactly once across `criteria` and `uncoverable`, no unknown ids) and the
+ * static safety rules.
  */
 export function validateGeneratedSuite(raw: unknown, ticket: Ticket): GeneratedSuite {
   if (!isRecord(raw)) throw new GenerationError('Generated suite must be a JSON object');
@@ -78,6 +86,9 @@ export function validateGeneratedSuite(raw: unknown, ticket: Ticket): GeneratedS
 
   const known = new Set(ticket.acceptanceCriteria.map((criterion) => criterion.id));
   const mentioned = [...criteria, ...uncoverable].map((entry) => entry.criterionId);
+  // Each criterion is either tested or uncoverable, exactly once.
+  const duplicates = [...new Set(mentioned.filter((id, index) => mentioned.indexOf(id) !== index))];
+  if (duplicates.length > 0) throw new GenerationError(`Generated suite has duplicate criterion ids: ${duplicates.join(', ')}`);
   const unknown = mentioned.filter((id) => !known.has(id));
   if (unknown.length > 0) throw new GenerationError(`Generated suite references unknown criteria: ${[...new Set(unknown)].join(', ')}`);
   const missing = [...known].filter((id) => !mentioned.includes(id));
