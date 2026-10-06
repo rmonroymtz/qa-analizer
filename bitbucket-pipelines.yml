@@ -20,9 +20,10 @@
 #     ANTHROPIC_API_KEY          (secured)
 #     JIRA_AC_FIELD, QA_AUTH_MODE, QA_LOGIN_*, QA_READONLY_ALLOW, QA_READONLY_ALLOW_HOSTS (optional)
 #
-# Security: the QA step executes AI-generated test code. Keep it in its own step
-# and container, and do not expose deployment credentials (cloud keys, SSH keys)
-# to it. qa-analyzer also strips credential variables from the test process.
+# Security: qa-analyzer never executes AI-generated code. Claude produces a
+# declarative test plan that qa-analyzer interprets, and production runs are
+# read-only. Still, keep the QA step separate and do not expose deployment
+# credentials (cloud keys, SSH keys) to it.
 
 image: atlassian/default-image:4
 
