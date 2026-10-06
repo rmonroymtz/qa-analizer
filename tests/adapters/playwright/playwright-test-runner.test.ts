@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  defaultLauncher,
   PlaywrightTestRunner,
   renderConfig,
   renderFixtures,
@@ -57,13 +58,13 @@ describe('renderConfig', () => {
   it('sets retries, workers, timeout, evidence and storage state', () => {
     const parsed = JSON.parse(config.slice(config.indexOf('defineConfig(') + 'defineConfig('.length, config.lastIndexOf(')')));
     expect(parsed).toMatchObject({
-      retries: 1,
+      retries: 0,
       workers: 1,
       timeout: 60_000,
       use: {
         baseURL: 'https://shop.example.com',
         storageState: '/out/.auth/state.json',
-        trace: 'retain-on-failure',
+        trace: 'off',
         screenshot: 'only-on-failure',
       },
       reporter: [['json', { outputFile: '/out/results.json' }], ['list']],
@@ -74,6 +75,26 @@ describe('renderConfig', () => {
     const base = { playwrightModuleUrl: PW_URL, testDir: '/t', outputDir: '/o', baseUrl: 'https://x.test' };
     expect(renderConfig({ ...base, readOnly: true })).toContain('"serviceWorkers":"block"');
     expect(renderConfig(base)).not.toContain('serviceWorkers');
+  });
+
+  const parse = (text: string) => JSON.parse(text.slice(text.indexOf('defineConfig(') + 'defineConfig('.length, text.lastIndexOf(')')));
+  const base = { playwrightModuleUrl: PW_URL, testDir: '/t', outputDir: '/o', baseUrl: 'https://x.test' };
+
+  it.each([
+    ['unauthenticated full mode', {}, 'retain-on-failure'],
+    ['authenticated full mode', { storageStatePath: '/s.json' }, 'off'],
+    ['unauthenticated read-only mode', { readOnly: true }, 'off'],
+    ['authenticated read-only mode', { storageStatePath: '/s.json', readOnly: true }, 'off'],
+  ])('trace setting for %s is %s (traces hold request headers and cookies)', (_label, extra, trace) => {
+    const parsed = parse(renderConfig({ ...base, ...extra }));
+    expect(parsed.use.trace).toBe(trace);
+    expect(parsed.use.screenshot).toBe('only-on-failure');
+  });
+
+  it('retries only in read-only mode, so a retry never replays a mutation', () => {
+    expect(parse(renderConfig(base)).retries).toBe(0);
+    expect(parse(renderConfig({ ...base, storageStatePath: '/s.json' })).retries).toBe(0);
+    expect(parse(renderConfig({ ...base, readOnly: true })).retries).toBe(1);
   });
 
   it('omits storageState when there is no session', () => {
@@ -205,4 +226,40 @@ describe('PlaywrightTestRunner', () => {
     expect(results[0]?.status).toBe('INCONCLUSIVE');
     expect(results[0]?.reason).toContain('read-only guard');
   });
+});
+
+describe('defaultLauncher', () => {
+  const isAlive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it('on timeout kills the whole process group, including grandchildren such as browsers', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'qa-launcher-'));
+    const pidFile = join(dir, 'grandchild.pid');
+    // The child starts a long-lived grandchild (standing in for Chromium), records its pid, and hangs.
+    const script = [
+      "const { spawn } = require('node:child_process');",
+      "const { writeFileSync } = require('node:fs');",
+      "const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });",
+      `writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid));`,
+      'setTimeout(() => {}, 60000);',
+    ].join('\n');
+    let grandchildPid: number | undefined;
+    try {
+      const result = await defaultLauncher(['-e', script], { cwd: dir, env: process.env, timeoutMs: 1_000 });
+      expect(result.stderrTail).toContain('killed by SIGKILL');
+      grandchildPid = Number(await readFile(pidFile, 'utf8'));
+      const deadline = Date.now() + 2_000;
+      while (isAlive(grandchildPid) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
+      expect(isAlive(grandchildPid)).toBe(false);
+    } finally {
+      if (grandchildPid !== undefined && isAlive(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
 });

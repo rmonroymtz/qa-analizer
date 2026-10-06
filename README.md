@@ -32,11 +32,13 @@ Expected result: a summary on stdout, and `qa-report/report.json` plus `qa-repor
 
 | Situation | Criterion result |
 |-----------|------------------|
-| Test passed (also on retry) | PASSED |
+| Test passed | PASSED |
+| Test passed only on its retry (read-only mode only) | PASSED, with the note "passed on retry" |
 | `expect(...)` assertion failed | FAILED, with expected/actual and a screenshot |
 | Assertion target not found, strict mode violation | INCONCLUSIVE |
 | Action or navigation error, timeout, blocked request | INCONCLUSIVE |
 | Spec failed to compile, test skipped | INCONCLUSIVE |
+| Test marked `test.fail`, `test.fixme` or `test.skip` | INCONCLUSIVE, "test was marked fail/fixme/skip" (never PASSED) |
 | Criterion not verifiable from the UI (Claude says so) | INCONCLUSIVE, with the reason |
 
 A failed criterion wins over inconclusive ones: one FAILED makes the ticket NOT_RESOLVED.
@@ -147,7 +149,13 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 | `qa-report/summary.md` | Human-readable summary |
 | `qa-report/generated/` | The generated spec, fixtures and Playwright config |
 | `qa-report/results.json` | Raw Playwright JSON report |
-| `qa-report/test-results/` | Traces and screenshots of failed tests |
+| `qa-report/test-results/` | Screenshots of failed tests, and traces only for unauthenticated full-mode runs |
+
+**Traces are off for authenticated and read-only runs.** A Playwright trace records request headers and cookies, including the session from the login step, and `qa-report/**` is uploaded as a pipeline artifact. So traces (`retain-on-failure`) are kept only when the run has no session and is not read-only; otherwise `trace: 'off'`. Screenshots are always kept on failure.
+
+**Retries.** Full mode (staging) runs each test once (`retries: 0`), because a retry could replay a mutation. Read-only mode allows one retry; a test that passes only on its retry is PASSED with the note "passed on retry".
+
+**Timeouts.** The Playwright CLI runs in its own process group. When the run exceeds its time limit, the whole group (CLI, workers and browsers) is killed.
 
 ## Known limitations
 

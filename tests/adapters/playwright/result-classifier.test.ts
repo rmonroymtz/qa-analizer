@@ -69,12 +69,12 @@ describe('classifyResults with a realistic report', () => {
     expect(byId['AC-3']?.reason).toContain('locator.click: Timeout 30000ms exceeded');
   });
 
-  it('a test that passes on retry (flaky) is PASSED', () => {
-    expect(byId['AC-4']?.status).toBe('PASSED');
+  it('a test that passes on retry (flaky) is PASSED, noting the retry', () => {
+    expect(byId['AC-4']).toEqual({ criterionId: 'AC-4', status: 'PASSED', reason: 'test passed (passed on retry)' });
   });
 
-  it('a skipped test is INCONCLUSIVE', () => {
-    expect(byId['AC-5']).toMatchObject({ status: 'INCONCLUSIVE', reason: 'test was skipped' });
+  it('a test.skip test is INCONCLUSIVE because it was marked to skip', () => {
+    expect(byId['AC-5']).toEqual({ criterionId: 'AC-5', status: 'INCONCLUSIVE', reason: 'test was marked fail/fixme/skip' });
   });
 
   it('an uncoverable criterion is INCONCLUSIVE with its reason', () => {
@@ -113,6 +113,35 @@ describe('classifyResults failure branches', () => {
     ['unknown runtime error', 'TypeError: Cannot read properties of undefined'],
   ])('%s is INCONCLUSIVE', (_label, message) => {
     expect(classify(message)?.status).toBe('INCONCLUSIVE');
+  });
+
+  it.each([
+    ['test.fail that failed as expected', 'failed', 'expected'],
+    ['test.fail that unexpectedly passed', 'failed', 'unexpected'],
+    ['test.fixme', 'skipped', 'skipped'],
+    ['test.skip', 'skipped', 'skipped'],
+  ])('%s is INCONCLUSIVE, never PASSED', (_label, expectedStatus, status) => {
+    const marked = test('[AC-1] t', status, status === 'unexpected' ? undefined : 'Error: expect(received).toBe(expected)', 'passed');
+    marked.tests[0] = { ...marked.tests[0], expectedStatus } as (typeof marked.tests)[0];
+    expect(classifyResults(report([marked]), one, ticket)[0]).toEqual({
+      criterionId: 'AC-1',
+      status: 'INCONCLUSIVE',
+      reason: 'test was marked fail/fixme/skip',
+    });
+  });
+
+  it('a test skipped at run time without being marked is INCONCLUSIVE "test was skipped"', () => {
+    const skipped = test('[AC-1] t', 'skipped', undefined, 'skipped');
+    skipped.tests[0] = { ...skipped.tests[0], expectedStatus: 'passed' } as (typeof skipped.tests)[0];
+    expect(classifyResults(report([skipped]), one, ticket)[0]).toMatchObject({ status: 'INCONCLUSIVE', reason: 'test was skipped' });
+  });
+
+  it('a first-try pass is PASSED without a retry note', () => {
+    expect(classifyResults(report([test('[AC-1] t', 'expected', undefined, 'passed')]), one, ticket)[0]).toEqual({
+      criterionId: 'AC-1',
+      status: 'PASSED',
+      reason: 'test passed',
+    });
   });
 
   it('a test-level timeout is INCONCLUSIVE even when the message mentions expect', () => {

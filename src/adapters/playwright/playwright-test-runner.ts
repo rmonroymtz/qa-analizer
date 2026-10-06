@@ -89,13 +89,20 @@ export interface ConfigTemplateInput {
   readOnly?: boolean;
 }
 
-/** The Playwright config, with absolute paths so it works from any working directory. */
+/**
+ * The Playwright config, with absolute paths so it works from any working directory.
+ *
+ * - Retries only in read-only mode: in full mode a retry could replay a mutation on staging.
+ * - Traces record request headers and cookies, so they are kept (on failure) only for
+ *   unauthenticated full-mode runs. Screenshots are always kept on failure.
+ */
 export function renderConfig(input: ConfigTemplateInput): string {
+  const keepTraces = !input.storageStatePath && !input.readOnly;
   const config = {
     testDir: input.testDir,
     testMatch: '**/*.spec.ts',
     timeout: TEST_TIMEOUT_MS,
-    retries: 1,
+    retries: input.readOnly ? 1 : 0,
     workers: 1,
     fullyParallel: false,
     outputDir: join(input.outputDir, 'test-results'),
@@ -106,7 +113,7 @@ export function renderConfig(input: ConfigTemplateInput): string {
       ...(input.readOnly ? { serviceWorkers: 'block' } : {}),
       browserName: 'chromium',
       headless: true,
-      trace: 'retain-on-failure',
+      trace: keepTraces ? 'retain-on-failure' : 'off',
       screenshot: 'only-on-failure',
     },
   };
@@ -119,11 +126,24 @@ export function renderConfig(input: ConfigTemplateInput): string {
   ].join('\n');
 }
 
-const defaultLauncher: ProcessLauncher = (args, options) =>
+/**
+ * Spawns `node <args>` as the leader of its own process group, so a timeout kills
+ * the Playwright CLI together with its workers and browsers.
+ */
+export const defaultLauncher: ProcessLauncher = (args, options) =>
   new Promise((resolvePromise) => {
     let stderr = '';
-    const child = spawn(process.execPath, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'inherit', 'pipe'] });
-    const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs);
+    const child = spawn(process.execPath, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'inherit', 'pipe'], detached: true });
+    const killGroup = () => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        // The group is already gone (or unsupported on this platform): fall back to the child.
+        child.kill('SIGKILL');
+      }
+    };
+    const timer = setTimeout(killGroup, options.timeoutMs);
     child.stderr?.on('data', (chunk: Buffer) => {
       process.stderr.write(chunk);
       stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_TAIL_CHARS);

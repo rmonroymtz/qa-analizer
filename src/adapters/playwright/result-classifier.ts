@@ -21,6 +21,8 @@ interface JsonSpec {
 
 interface JsonTest {
   status: 'skipped' | 'expected' | 'unexpected' | 'flaky';
+  /** `failed` for test.fail, `skipped` for test.fixme/test.skip; `passed` for an ordinary test. */
+  expectedStatus?: 'passed' | 'failed' | 'timedOut' | 'skipped' | 'interrupted';
   results: JsonResult[];
 }
 
@@ -81,9 +83,12 @@ function lastScreenshot(results: JsonResult[]): string | undefined {
 }
 
 function classifyTest(criterionId: string, test: JsonTest): CriterionResult {
-  if (test.status === 'expected' || test.status === 'flaky') {
-    return { criterionId, status: 'PASSED', reason: 'test passed' };
+  // A test marked fail/fixme/skip does not check the criterion, whatever its outcome.
+  if (test.expectedStatus !== undefined && test.expectedStatus !== 'passed') {
+    return { criterionId, status: 'INCONCLUSIVE', reason: 'test was marked fail/fixme/skip' };
   }
+  if (test.status === 'expected') return { criterionId, status: 'PASSED', reason: 'test passed' };
+  if (test.status === 'flaky') return { criterionId, status: 'PASSED', reason: 'test passed (passed on retry)' };
   if (test.status === 'skipped') return { criterionId, status: 'INCONCLUSIVE', reason: 'test was skipped' };
 
   const last = test.results[test.results.length - 1];
