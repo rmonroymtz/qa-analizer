@@ -32,7 +32,7 @@ describe('loadConfig', () => {
     const config = loadConfig(['verify'], baseEnv());
     expect(config.command).toBe('verify');
     expect(config.environment).toBe('staging');
-    expect(config.policy).toEqual({ mode: 'full', allowedMutations: [] });
+    expect(config.policy).toEqual({ mode: 'full', allowedMutations: [], allowedHosts: [] });
     expect(config.startUrl).toBe('/');
     expect(config.dryRun).toBe(false);
     expect(config.comment).toBe(true);
@@ -129,6 +129,7 @@ describe('loadConfig', () => {
     expect(config.policy).toEqual({
       mode: 'read-only',
       allowedMutations: ['/login', '/api/search', '/api/session/**'],
+      allowedHosts: [],
     });
     expect(config.auth).toEqual({
       mode: 'form',

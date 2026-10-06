@@ -49,6 +49,7 @@ export async function performFormLogin(
       await installReadOnlyGuard(context as unknown as RoutableTarget, {
         baseUrl: config.targetBaseUrl,
         allowedMutations: config.policy.allowedMutations,
+        allowedHosts: config.policy.allowedHosts,
       });
     }
     const page = await context.newPage();

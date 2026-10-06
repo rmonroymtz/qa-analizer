@@ -42,6 +42,7 @@ export class PlaywrightPageInspector implements PageInspector {
         blocked = await installReadOnlyGuard(context as unknown as RoutableTarget, {
           baseUrl: this.options.baseUrl,
           allowedMutations: this.options.policy.allowedMutations,
+        allowedHosts: this.options.policy.allowedHosts,
         });
       }
       const page = await context.newPage();

@@ -147,4 +147,11 @@ describe('ClaudeTestGenerator', () => {
     await expect(generator.generate(generationInput)).rejects.toThrow(/529 overloaded/);
     await expect(generator.generate(generationInput)).rejects.toBeInstanceOf(GenerationError);
   });
+
+  it('keeps the HTTP status of an API error', async () => {
+    const client: MessagesStreamClient = {
+      beta: { messages: { stream: () => ({ finalMessage: async () => { throw Object.assign(new Error('invalid x-api-key'), { status: 401 }); } }) } },
+    };
+    await expect(new ClaudeTestGenerator({ client, model: 'm' }).generate(generationInput)).rejects.toMatchObject({ status: 401 });
+  });
 });

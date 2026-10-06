@@ -157,7 +157,9 @@ export class PlaywrightTestRunner implements TestRunner {
     await mkdir(generatedDir, { recursive: true });
     await rm(resultsPath, { force: true });
     const guard: GuardOptions | undefined =
-      ctx.policy.mode === 'read-only' ? { baseUrl: ctx.baseUrl, allowedMutations: ctx.policy.allowedMutations } : undefined;
+      ctx.policy.mode === 'read-only'
+        ? { baseUrl: ctx.baseUrl, allowedMutations: ctx.policy.allowedMutations, allowedHosts: ctx.policy.allowedHosts ?? [] }
+        : undefined;
     // The package.json pins ESM so absolute `file:` imports work whatever the surrounding repo uses.
     await writeFile(join(generatedDir, 'package.json'), `${JSON.stringify({ type: 'module' })}\n`);
     await writeFile(join(generatedDir, 'qa-fixtures.ts'), renderFixtures({ playwrightModuleUrl, guardModuleUrl, guard }));

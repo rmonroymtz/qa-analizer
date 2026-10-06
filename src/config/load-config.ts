@@ -76,6 +76,7 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_READY_TIMEOUT_MS = 300_000;
 const REDACTED = '***';
 const FAIL_ON_VALUES: readonly FailOnPolicy[] = ['not-resolved', 'inconclusive', 'never'];
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
 function nonEmpty(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -120,7 +121,7 @@ export function redactConfig(config: AppConfig): AppConfig {
     command: config.command,
     ticket: config.ticket,
     environment: config.environment,
-    policy: { mode: config.policy.mode, allowedMutations: [...config.policy.allowedMutations] },
+    policy: { ...config.policy, allowedMutations: [...config.policy.allowedMutations], allowedHosts: [...(config.policy.allowedHosts ?? [])] },
     startUrl: config.startUrl,
     dryRun: config.dryRun,
     comment: config.comment,
@@ -289,6 +290,10 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
 
   const auth = loadAuth(env, issues);
   const readiness = loadReadiness(env, issues);
+  const allowedHosts = splitList(env.QA_READONLY_ALLOW_HOSTS).map((host) => host.toLowerCase());
+  if (allowedHosts.some((host) => !HOSTNAME.test(host))) {
+    issues.push('QA_READONLY_ALLOW_HOSTS must be a comma-separated list of bare hostnames (no scheme, port or path)');
+  }
 
   if (issues.length > 0) throw new ConfigError(issues);
 
@@ -301,7 +306,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     command: 'verify',
     ticket: nonEmpty(flags.ticket) ?? nonEmpty(env.QA_TICKET),
     environment,
-    policy: policyFor(environment, [...new Set(allowedMutations)]),
+    policy: policyFor(environment, [...new Set(allowedMutations)], [...new Set(allowedHosts)]),
     startUrl: nonEmpty(flags.url) ?? '/',
     dryRun: flags.dryRun,
     comment: !flags.noComment,

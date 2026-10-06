@@ -13,12 +13,26 @@ describe('shouldBlockRequest', () => {
     expect(shouldBlockRequest({ method, url: 'https://shop.example.com/api/orders' }, options)).toBe(false);
   });
 
-  it('ignores mutations to other hosts', () => {
-    expect(shouldBlockRequest({ method: 'POST', url: 'https://analytics.thirdparty.io/collect' }, options)).toBe(false);
+  it('blocks mutations to any other host', () => {
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://analytics.thirdparty.io/collect' }, options)).toBe(true);
+    expect(shouldBlockRequest({ method: 'DELETE', url: 'https://api.other.io/items/1' }, options)).toBe(true);
   });
 
-  it('treats a different port as a different host', () => {
-    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com:8443/api/orders' }, options)).toBe(false);
+  it('applies allowed paths to the target host only', () => {
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://evil.example.org/login' }, options)).toBe(true);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com:8443/login' }, options)).toBe(true);
+  });
+
+  it('fully allows mutations to allowed hosts, matched by hostname', () => {
+    const withHosts = { ...options, allowedHosts: ['analytics.thirdparty.io', 'Auth.Example.com'] };
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://analytics.thirdparty.io/collect' }, withHosts)).toBe(false);
+    expect(shouldBlockRequest({ method: 'PUT', url: 'https://auth.example.com:444/any/path' }, withHosts)).toBe(false);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://sub.analytics.thirdparty.io/collect' }, withHosts)).toBe(true);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/api/orders' }, withHosts)).toBe(true);
+  });
+
+  it('still blocks other hosts when the base URL is invalid', () => {
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/login' }, { baseUrl: 'not a url', allowedMutations: ['/login'] })).toBe(true);
   });
 
   it('matches the host case-insensitively', () => {
@@ -98,15 +112,28 @@ describe('config to guard wiring', () => {
     QA_LOGIN_PASSWORD_SELECTOR: '#p',
     QA_LOGIN_SUBMIT_SELECTOR: '#s',
     QA_READONLY_ALLOW: '/api/search',
+    QA_READONLY_ALLOW_HOSTS: 'analytics.thirdparty.io, Stats.Example.com',
   };
 
   it('a production config allows login and listed paths but blocks other mutations', () => {
     const config = loadConfig(['verify'], env);
     expect(config.policy.mode).toBe('read-only');
-    const guard = { baseUrl: config.targetBaseUrl, allowedMutations: config.policy.allowedMutations };
+    const guard = { baseUrl: config.targetBaseUrl, allowedMutations: config.policy.allowedMutations, allowedHosts: config.policy.allowedHosts };
     expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/auth/login' }, guard)).toBe(false);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/api/search' }, guard)).toBe(false);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/api/checkout' }, guard)).toBe(true);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://analytics.thirdparty.io/collect' }, guard)).toBe(false);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://stats.example.com/hit' }, guard)).toBe(false);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://other.io/hit' }, guard)).toBe(true);
+  });
+
+  it('parses QA_READONLY_ALLOW_HOSTS into lower-case hostnames', () => {
+    expect(loadConfig(['verify'], env).policy.allowedHosts).toEqual(['analytics.thirdparty.io', 'stats.example.com']);
+    expect(loadConfig(['verify'], { ...env, QA_READONLY_ALLOW_HOSTS: undefined }).policy.allowedHosts).toEqual([]);
+  });
+
+  it('rejects an allowed host that is not a bare hostname', () => {
+    expect(() => loadConfig(['verify'], { ...env, QA_READONLY_ALLOW_HOSTS: 'https://x.io/path' })).toThrow(/QA_READONLY_ALLOW_HOSTS/);
   });
 
   it('a staging config is full mode', () => {

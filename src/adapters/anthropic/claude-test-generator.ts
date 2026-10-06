@@ -5,9 +5,13 @@ import { buildGenerationPrompt, GENERATION_OUTPUT_SCHEMA } from './generation-pr
 
 /** Test generation failed; upstream this becomes an INCONCLUSIVE verdict. */
 export class GenerationError extends Error {
-  constructor(message: string) {
+  /** HTTP status of the underlying API error, when there was one (401/403 mean a setup problem). */
+  readonly status: number | undefined;
+
+  constructor(message: string, status?: number) {
     super(message);
     this.name = 'GenerationError';
+    this.status = status;
   }
 }
 
@@ -110,7 +114,11 @@ export class ClaudeTestGenerator implements TestGenerator {
         .finalMessage();
     } catch (error) {
       if (error instanceof GenerationError) throw error;
-      throw new GenerationError(`Claude request failed: ${error instanceof Error ? error.message : String(error)}`);
+      const status = (error as { status?: unknown } | null)?.status;
+      throw new GenerationError(
+        `Claude request failed: ${error instanceof Error ? error.message : String(error)}`,
+        typeof status === 'number' ? status : undefined,
+      );
     }
 
     if (message.stop_reason === 'refusal') throw new GenerationError('Claude declined to generate tests (stop_reason: refusal)');

@@ -55,7 +55,8 @@ describe('aggregateVerdict', () => {
 
 describe('policyFor', () => {
   it('is read-only in production and full in staging', () => {
-    expect(policyFor('production', ['/login'])).toEqual({ mode: 'read-only', allowedMutations: ['/login'] });
-    expect(policyFor('staging', [])).toEqual({ mode: 'full', allowedMutations: [] });
+    expect(policyFor('production', ['/login'])).toEqual({ mode: 'read-only', allowedMutations: ['/login'], allowedHosts: [] });
+    expect(policyFor('production', [], ['stats.example.com']).allowedHosts).toEqual(['stats.example.com']);
+    expect(policyFor('staging', [])).toEqual({ mode: 'full', allowedMutations: [], allowedHosts: [] });
   });
 });

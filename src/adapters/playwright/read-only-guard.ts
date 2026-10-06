@@ -2,6 +2,8 @@ export interface GuardOptions {
   baseUrl: string;
   /** Path globs (`*` = one segment, `**` = any) or regex strings starting with `^`, matched against the pathname. */
   allowedMutations: string[];
+  /** Hostnames (exact, case-insensitive) to which every mutating request is allowed. */
+  allowedHosts?: string[] | undefined;
 }
 
 export interface RequestInfo {
@@ -51,21 +53,28 @@ function patternMatches(pattern: string, pathname: string): boolean {
   }
 }
 
+function parseUrl(raw: string): URL | undefined {
+  try {
+    return new URL(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Decides whether a request must be blocked in read-only mode: a mutating method,
- * sent to the target host, to a path that is not explicitly allowed.
+ * Decides whether a request must be blocked in read-only mode: every mutating
+ * method to any host is blocked, except to an allowed host, or to an allowed
+ * path on the target host.
  */
 export function shouldBlockRequest(request: RequestInfo, options: GuardOptions): boolean {
   if (!MUTATING_METHODS.has(request.method.toUpperCase())) return false;
-  let target: URL;
-  let requested: URL;
-  try {
-    target = new URL(options.baseUrl);
-    requested = new URL(request.url);
-  } catch {
-    return false;
-  }
-  if (requested.host !== target.host) return false;
+  const requested = parseUrl(request.url);
+  // Only network requests can mutate server state; data: and blob: URLs never leave the browser.
+  if (requested === undefined || (requested.protocol !== 'http:' && requested.protocol !== 'https:')) return false;
+  const allowedHosts = (options.allowedHosts ?? []).map((host) => host.trim().toLowerCase());
+  if (allowedHosts.includes(requested.hostname)) return false;
+  const target = parseUrl(options.baseUrl);
+  if (target === undefined || requested.host !== target.host) return true;
   return !options.allowedMutations.some((pattern) => patternMatches(pattern, requested.pathname));
 }
 
