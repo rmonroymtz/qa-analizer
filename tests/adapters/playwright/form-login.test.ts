@@ -9,12 +9,13 @@ const PASSWORD = 'very-secret-password';
 const config: FormLoginConfig = {
   targetBaseUrl: 'https://app.example.com',
   outputDir: '/tmp/qa-out',
-  policy: { mode: 'full', allowedMutations: ['/login'] },
+  policy: { mode: 'full', allowedMutations: [] },
   auth: {
     mode: 'form',
     user: 'qa-user',
     password: PASSWORD,
     loginPath: '/login',
+    loginMutationPaths: ['/login', '/api/auth'],
     userSelector: '#user',
     passwordSelector: '#password',
     submitSelector: 'button[type=submit]',
@@ -54,8 +55,10 @@ function fakeBrowser(failOn?: string, afterSubmit: AfterSubmit = { url: 'https:/
       },
     }),
   };
+  let routeHandler: ((route: unknown) => Promise<void>) | undefined;
   const context = {
-    route: async () => {
+    route: async (_url: string, handler: (route: unknown) => Promise<void>) => {
+      routeHandler = handler;
       steps.push('route');
     },
     routeWebSocket: async () => {
@@ -73,7 +76,22 @@ function fakeBrowser(failOn?: string, afterSubmit: AfterSubmit = { url: 'https:/
       return context;
     },
   } as unknown as Browser;
-  return { browser, steps, contextOptions: () => contextOptions };
+  /** Runs the installed guard on one request and returns its decision. */
+  const decide = async (method: string, url: string): Promise<'abort' | 'continue'> => {
+    let decision: 'abort' | 'continue' | undefined;
+    await routeHandler?.({
+      request: () => ({ method: () => method, url: () => url }),
+      abort: async () => {
+        decision = 'abort';
+      },
+      continue: async () => {
+        decision = 'continue';
+      },
+    });
+    if (decision === undefined) throw new Error('no guard installed');
+    return decision;
+  };
+  return { browser, steps, contextOptions: () => contextOptions, decide };
 }
 
 describe('performFormLogin', () => {
@@ -124,11 +142,20 @@ describe('performFormLogin', () => {
 
   it('in read-only mode, blocks service workers and installs the guard before opening the page', async () => {
     const fake = fakeBrowser();
-    await performFormLogin({ ...config, policy: { mode: 'read-only', allowedMutations: ['/login'] } }, fake.browser, {
+    await performFormLogin({ ...config, policy: { mode: 'read-only', allowedMutations: [] } }, fake.browser, {
       mkdir: async () => undefined,
     });
     expect(fake.contextOptions()).toEqual({ baseURL: 'https://app.example.com', serviceWorkers: 'block' });
     expect(fake.steps.slice(0, 3)).toEqual(['route', 'routeWebSocket', 'goto /login']);
+  });
+
+  it('in read-only mode, lets only the login endpoints and the policy paths mutate during the login', async () => {
+    const fake = fakeBrowser();
+    await performFormLogin({ ...config, policy: { mode: 'read-only', allowedMutations: ['/api/search'] } }, fake.browser, { mkdir: async () => undefined });
+    expect(await fake.decide('POST', 'https://app.example.com/login')).toBe('continue');
+    expect(await fake.decide('POST', 'https://app.example.com/api/auth')).toBe('continue');
+    expect(await fake.decide('POST', 'https://app.example.com/api/search')).toBe('continue');
+    expect(await fake.decide('POST', 'https://app.example.com/api/cart')).toBe('abort');
   });
 
   it('throws LoginError without secrets and still closes the context', async () => {

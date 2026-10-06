@@ -83,13 +83,15 @@ qa-analyzer verify [options]
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--ticket <KEY>` | `QA_TICKET`, then branch, then commit | Ticket to verify |
-| `--env <name>` | `QA_ENV`, then `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | `staging` (or `stage`), `production` (or `prod`) |
-| `--url <path>` | `/` | Start page to inspect |
+| `--env <name>` | `QA_ENV`, then `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | `staging` (or `stage`), `production` (or `prod`). Must agree with `BITBUCKET_DEPLOYMENT_ENVIRONMENT` when Bitbucket sets it (see below) |
+| `--url <path>` | `/` | Start page to inspect (resolved from the host root; only plan `goto` paths keep the `TARGET_BASE_URL` path prefix) |
 | `--output-dir <dir>` | `qa-report` | Where reports and evidence go |
 | `--fail-on <policy>` | `not-resolved` | Exit code policy, see below |
 | `--dry-run` | off | Do everything except commenting on Jira |
 | `--no-comment` | off | Never comment on Jira |
 | `-h`, `--help` | | Show usage |
+
+**Environment conflicts fail closed.** In a Bitbucket deployment step, Bitbucket sets `BITBUCKET_DEPLOYMENT_ENVIRONMENT` automatically. If `--env` or `QA_ENV` is also set and names a different environment, the run stops with a configuration error (exit 2) that names both values, instead of guessing. (`--env` wins over `QA_ENV`, but must still agree with Bitbucket.) When Bitbucket's environment name is not one of `staging`/`stage`/`production`/`prod` (for example `prod-eu`), an override may only force `production`, which is read-only. Leave `QA_ENV` empty in Bitbucket.
 
 ## Exit codes
 
@@ -115,7 +117,7 @@ Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on ne
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `TARGET_BASE_URL` | Yes | Base URL of the deployed environment. It may include a path prefix (`https://example.com/app`); plan `goto` paths are joined to it |
-| `QA_ENV` | Yes, unless `--env` or `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | `staging` or `production` |
+| `QA_ENV` | Yes, unless `--env` or `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | `staging` or `production`. Leave it empty in Bitbucket: a value that conflicts with `BITBUCKET_DEPLOYMENT_ENVIRONMENT` fails the run |
 | `JIRA_BASE_URL` | Yes | e.g. `https://acme.atlassian.net` |
 | `JIRA_EMAIL` | Yes | Jira account for the API token |
 | `JIRA_API_TOKEN` | Yes (secured) | Jira API token |
@@ -132,7 +134,8 @@ Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on ne
 | `QA_LOGIN_PATH` | With `form` | Login page path, e.g. `/login` |
 | `QA_LOGIN_USER_SELECTOR`, `QA_LOGIN_PASSWORD_SELECTOR`, `QA_LOGIN_SUBMIT_SELECTOR` | With `form` | Selectors of the login form |
 | `QA_LOGIN_SUCCESS_URL` | No | Regex the URL must match after login. Without it, the login succeeds only if the page leaves the login path or the password field disappears |
-| `QA_READONLY_ALLOW` | No | Path globs (or `^regex`) on the target host that may mutate in production |
+| `QA_READONLY_ALLOW` | No | Path globs (or `^regex`) on the target host that may mutate in production, during inspection and tests |
+| `QA_LOGIN_ALLOW` | No (only with `form`) | Extra path globs (or `^regex`) the login form may post to in production (for example `/api/session`), allowed during the login only |
 | `QA_READONLY_ALLOW_HOSTS` | No | Hostnames to which any mutation is allowed in production (e.g. analytics) |
 | `BITBUCKET_BRANCH`, `BITBUCKET_COMMIT`, `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | Set by Bitbucket | Key resolution, readiness and environment |
 
@@ -143,7 +146,7 @@ Secrets are only read from the environment, are never printed, and are scrubbed 
 `production` always runs read-only:
 
 - Only `GET`, `HEAD` and `OPTIONS` are treated as safe. Every browser request with any other method (`POST`, `PUT`, `PATCH`, `DELETE`, WebDAV or custom methods) is aborted, to **any** host.
-- Exceptions: the login path, paths in `QA_READONLY_ALLOW` (on the target host only), and hosts in `QA_READONLY_ALLOW_HOSTS`.
+- Exceptions: paths in `QA_READONLY_ALLOW` (on the target host only) and hosts in `QA_READONLY_ALLOW_HOSTS`. During the hand-written login only, the login page path and the paths in `QA_LOGIN_ALLOW` are allowed too; the page inspection and the plan tests never get them. Paths are matched against the full URL pathname, including any `TARGET_BASE_URL` path prefix.
 - Service workers are blocked, and WebSocket connections are closed for every host except those in `QA_READONLY_ALLOW_HOSTS`.
 - The run fails closed: if the guard cannot be installed (for example, `TARGET_BASE_URL` does not parse), nothing runs.
 - The guard is installed by qa-analyzer on every test's browser context before the page is created. The plan vocabulary has no way to remove routes, change context options or send HTTP requests outside the page.
@@ -154,7 +157,7 @@ A blocked request is listed in the criterion reason. An assertion that fails aft
 
 ## Login setup
 
-Set `QA_AUTH_MODE=form` and the `TEST_*` and `QA_LOGIN_*` variables. qa-analyzer logs in once with a hand-written flow, saves the session in a temporary directory outside `qa-report/`, reuses it for inspection and tests, and deletes it at the end. Use a dedicated test account with the least privileges needed. If the login form posts to another host (SSO), add that host to `QA_READONLY_ALLOW_HOSTS` for production.
+Set `QA_AUTH_MODE=form` and the `TEST_*` and `QA_LOGIN_*` variables. qa-analyzer logs in once with a hand-written flow, saves the session in a temporary directory outside `qa-report/`, reuses it for inspection and tests, and deletes it at the end. In production, the login page path (and `QA_LOGIN_ALLOW`) may receive mutating requests during the login only. Use a dedicated test account with the least privileges needed. If the login form posts to another host (SSO), add that host to `QA_READONLY_ALLOW_HOSTS` for production.
 
 ## Bitbucket integration
 

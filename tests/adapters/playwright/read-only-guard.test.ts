@@ -163,16 +163,24 @@ describe('config to guard wiring', () => {
     QA_READONLY_ALLOW_HOSTS: 'analytics.thirdparty.io, Stats.Example.com',
   };
 
-  it('a production config allows login and listed paths but blocks other mutations', () => {
+  it('a production config allows listed paths but blocks the login path and other mutations for the inspector and the runner', () => {
     const config = loadConfig(['verify'], env);
     expect(config.policy.mode).toBe('read-only');
     const guard = { baseUrl: config.targetBaseUrl, allowedMutations: config.policy.allowedMutations, allowedHosts: config.policy.allowedHosts };
-    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/auth/login' }, guard)).toBe(false);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/auth/login' }, guard)).toBe(true);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/api/search' }, guard)).toBe(false);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/api/checkout' }, guard)).toBe(true);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://analytics.thirdparty.io/collect' }, guard)).toBe(false);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://stats.example.com/hit' }, guard)).toBe(false);
     expect(shouldBlockRequest({ method: 'POST', url: 'https://other.io/hit' }, guard)).toBe(true);
+  });
+
+  it('the login guard adds the login path to the policy paths', () => {
+    const config = loadConfig(['verify'], env);
+    const loginPaths = config.auth.mode === 'form' ? config.auth.loginMutationPaths : [];
+    const guard = { baseUrl: config.targetBaseUrl, allowedMutations: [...config.policy.allowedMutations, ...loginPaths], allowedHosts: config.policy.allowedHosts };
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/auth/login' }, guard)).toBe(false);
+    expect(shouldBlockRequest({ method: 'POST', url: 'https://shop.example.com/api/checkout' }, guard)).toBe(true);
   });
 
   it('parses QA_READONLY_ALLOW_HOSTS into lower-case hostnames', () => {

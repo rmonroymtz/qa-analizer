@@ -82,7 +82,8 @@ export async function performFormLogin(
     if (readOnly) {
       await installReadOnlyGuard(context as unknown as RoutableTarget, {
         baseUrl: config.targetBaseUrl,
-        allowedMutations: config.policy.allowedMutations,
+        // The login endpoints are allowed here only, never in the inspector or the plan runner.
+        allowedMutations: [...config.policy.allowedMutations, ...auth.loginMutationPaths],
         allowedHosts: config.policy.allowedHosts,
       });
     }

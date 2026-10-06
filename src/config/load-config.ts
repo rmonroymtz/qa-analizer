@@ -37,6 +37,12 @@ export type AuthConfig =
       user: string;
       password: string;
       loginPath: string;
+      /**
+       * Path globs (or `^regex`) allowed to mutate in read-only mode during the
+       * hand-written login only: the login page path plus `QA_LOGIN_ALLOW`. The
+       * inspector and the plan runner never get them.
+       */
+      loginMutationPaths: string[];
       userSelector: string;
       passwordSelector: string;
       submitSelector: string;
@@ -127,7 +133,8 @@ function isValidRegex(source: string): boolean {
 
 /** Returns a deep copy of the config with every secret replaced by `***`. */
 export function redactConfig(config: AppConfig): AppConfig {
-  const auth: AuthConfig = config.auth.mode === 'form' ? { ...config.auth, password: REDACTED } : { mode: 'none' };
+  const auth: AuthConfig =
+    config.auth.mode === 'form' ? { ...config.auth, loginMutationPaths: [...config.auth.loginMutationPaths], password: REDACTED } : { mode: 'none' };
   return {
     command: config.command,
     ticket: config.ticket,
@@ -235,7 +242,11 @@ function requireEnv(env: NodeJS.ProcessEnv, name: string, issues: string[]): str
 
 function loadAuth(env: NodeJS.ProcessEnv, issues: string[]): AuthConfig {
   const mode = nonEmpty(env.QA_AUTH_MODE)?.toLowerCase() ?? 'none';
-  if (mode === 'none') return { mode: 'none' };
+  const loginAllow = splitList(env.QA_LOGIN_ALLOW);
+  if (mode === 'none') {
+    if (loginAllow.length > 0) issues.push('QA_LOGIN_ALLOW requires QA_AUTH_MODE=form');
+    return { mode: 'none' };
+  }
   if (mode !== 'form') {
     issues.push('QA_AUTH_MODE must be one of: none, form');
     return { mode: 'none' };
@@ -244,11 +255,15 @@ function loadAuth(env: NodeJS.ProcessEnv, issues: string[]): AuthConfig {
   if (successUrlPattern !== undefined && !isValidRegex(successUrlPattern)) {
     issues.push('QA_LOGIN_SUCCESS_URL must be a valid regular expression');
   }
+  const loginPath = requireEnv(env, 'QA_LOGIN_PATH', issues);
+  // The guard matches pathnames, so the query and fragment of the login page are dropped.
+  const loginPagePath = loginPath.split(/[?#]/)[0] ?? '';
   return {
     mode: 'form',
     user: requireEnv(env, 'TEST_USER', issues),
     password: requireEnv(env, 'TEST_PASSWORD', issues),
-    loginPath: requireEnv(env, 'QA_LOGIN_PATH', issues),
+    loginPath,
+    loginMutationPaths: [...new Set([...(loginPagePath ? [loginPagePath] : []), ...loginAllow])],
     userSelector: requireEnv(env, 'QA_LOGIN_USER_SELECTOR', issues),
     passwordSelector: requireEnv(env, 'QA_LOGIN_PASSWORD_SELECTOR', issues),
     submitSelector: requireEnv(env, 'QA_LOGIN_SUBMIT_SELECTOR', issues),
@@ -271,6 +286,37 @@ function loadReadiness(env: NodeJS.ProcessEnv, issues: string[]): ReadinessConfi
   return { url, timeoutMs };
 }
 
+/**
+ * Resolves the environment from `--env`, then `QA_ENV`, then
+ * `BITBUCKET_DEPLOYMENT_ENVIRONMENT`, and fails closed when an override
+ * disagrees with Bitbucket: a run must never test a production deployment in
+ * full mode because of a stale variable. When Bitbucket's environment name is
+ * not a known one, an override may only force production (read-only).
+ */
+function resolveEnvironment(flag: string | undefined, qaEnv: string | undefined, bitbucket: string | undefined, issues: string[]): Environment {
+  const override = flag !== undefined ? { source: '--env', raw: flag } : qaEnv !== undefined ? { source: 'QA_ENV', raw: qaEnv } : undefined;
+  const raw = override?.raw ?? bitbucket;
+  if (raw === undefined) {
+    issues.push('environment is required (--env, QA_ENV or BITBUCKET_DEPLOYMENT_ENVIRONMENT)');
+    return 'staging';
+  }
+  const environment = normalizeEnvironment(raw);
+  if (environment === undefined) {
+    issues.push('environment must be one of: staging, stage, production, prod');
+    return 'staging';
+  }
+  if (override !== undefined && bitbucket !== undefined) {
+    const deployed = normalizeEnvironment(bitbucket);
+    const conflict = `environment conflict: ${override.source} is "${override.raw}" but BITBUCKET_DEPLOYMENT_ENVIRONMENT is "${bitbucket}"`;
+    if (deployed === undefined && environment !== 'production') {
+      issues.push(`${conflict}, which is not a known environment; only production (read-only) may be forced`);
+    } else if (deployed !== undefined && deployed !== environment) {
+      issues.push(`${conflict}; remove ${override.source} or make it match`);
+    }
+  }
+  return environment;
+}
+
 function splitList(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
@@ -290,15 +336,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     issues.push('command must be "verify"');
   }
 
-  const rawEnvironment = nonEmpty(flags.env) ?? nonEmpty(env.QA_ENV) ?? nonEmpty(env.BITBUCKET_DEPLOYMENT_ENVIRONMENT);
-  let environment: Environment = 'staging';
-  if (rawEnvironment === undefined) {
-    issues.push('environment is required (--env, QA_ENV or BITBUCKET_DEPLOYMENT_ENVIRONMENT)');
-  } else {
-    const normalized = normalizeEnvironment(rawEnvironment);
-    if (normalized === undefined) issues.push('environment must be one of: staging, stage, production, prod');
-    else environment = normalized;
-  }
+  const environment = resolveEnvironment(nonEmpty(flags.env), nonEmpty(env.QA_ENV), nonEmpty(env.BITBUCKET_DEPLOYMENT_ENVIRONMENT), issues);
 
   const failOnRaw = flags.failOn ?? 'not-resolved';
   const failOn = FAIL_ON_VALUES.find((value) => value === failOnRaw);
@@ -336,10 +374,8 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
 
   if (issues.length > 0) throw new ConfigError(issues);
 
-  const allowedMutations = [
-    ...(auth.mode === 'form' ? [auth.loginPath] : []),
-    ...splitList(env.QA_READONLY_ALLOW),
-  ];
+  // Only QA_READONLY_ALLOW: the login endpoints live in `auth.loginMutationPaths`, used by the login alone.
+  const allowedMutations = splitList(env.QA_READONLY_ALLOW);
 
   hideSecret(jira, 'apiToken');
   if (auth.mode === 'form') hideSecret(auth, 'password');

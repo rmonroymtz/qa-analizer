@@ -120,12 +120,46 @@ describe('loadConfig', () => {
     expect(loadConfig(['verify'], env).environment).toBe('production');
   });
 
-  it('lets the --env flag win over environment variables', () => {
-    const env = baseEnv({ QA_ENV: 'production', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'production' });
+  it('lets the --env flag win over QA_ENV', () => {
+    const env = baseEnv({ QA_ENV: 'production' });
     expect(loadConfig(['verify', '--env', 'staging'], env).environment).toBe('staging');
   });
 
-  it('derives a read-only policy in production that always allows the login path', () => {
+  it('accepts QA_ENV and --env when they agree with BITBUCKET_DEPLOYMENT_ENVIRONMENT', () => {
+    expect(loadConfig(['verify'], baseEnv({ QA_ENV: 'prod', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'production' })).environment).toBe('production');
+    expect(loadConfig(['verify', '--env', 'stage'], baseEnv({ QA_ENV: undefined, BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'staging' })).environment).toBe('staging');
+    // An empty QA_ENV (as in env.example) does not count as set.
+    expect(loadConfig(['verify'], baseEnv({ QA_ENV: '', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'production' })).environment).toBe('production');
+  });
+
+  it('fails closed when QA_ENV conflicts with BITBUCKET_DEPLOYMENT_ENVIRONMENT', () => {
+    const error = captureError(() => loadConfig(['verify'], baseEnv({ QA_ENV: 'staging', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'production' })));
+    expect(error.issues).toEqual([
+      'environment conflict: QA_ENV is "staging" but BITBUCKET_DEPLOYMENT_ENVIRONMENT is "production"; remove QA_ENV or make it match',
+    ]);
+  });
+
+  it('fails closed when --env conflicts with BITBUCKET_DEPLOYMENT_ENVIRONMENT', () => {
+    const error = captureError(() => loadConfig(['verify', '--env', 'staging'], baseEnv({ QA_ENV: undefined, BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'Production' })));
+    expect(error.issues).toEqual([
+      'environment conflict: --env is "staging" but BITBUCKET_DEPLOYMENT_ENVIRONMENT is "Production"; remove --env or make it match',
+    ]);
+  });
+
+  it('fails closed when --env conflicts with BITBUCKET_DEPLOYMENT_ENVIRONMENT even if QA_ENV agrees with it', () => {
+    const error = captureError(() => loadConfig(['verify', '--env', 'staging'], baseEnv({ QA_ENV: 'production', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'production' })));
+    expect(error.issues.join('\n')).toMatch(/environment conflict: --env is "staging"/);
+  });
+
+  it('only lets an override force production when BITBUCKET_DEPLOYMENT_ENVIRONMENT is not a known name', () => {
+    expect(loadConfig(['verify'], baseEnv({ QA_ENV: 'production', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'prod-eu' })).environment).toBe('production');
+    const error = captureError(() => loadConfig(['verify'], baseEnv({ QA_ENV: 'staging', BITBUCKET_DEPLOYMENT_ENVIRONMENT: 'prod-eu' })));
+    expect(error.issues).toEqual([
+      'environment conflict: QA_ENV is "staging" but BITBUCKET_DEPLOYMENT_ENVIRONMENT is "prod-eu", which is not a known environment; only production (read-only) may be forced',
+    ]);
+  });
+
+  it('derives a read-only policy in production from QA_READONLY_ALLOW only, and a login-only mutation list', () => {
     const config = loadConfig(
       ['verify'],
       baseEnv({
@@ -139,17 +173,20 @@ describe('loadConfig', () => {
         QA_LOGIN_SUBMIT_SELECTOR: 'button[type=submit]',
         QA_LOGIN_SUCCESS_URL: '/dashboard$',
         QA_READONLY_ALLOW: '/api/search, /api/session/** ,',
+        QA_LOGIN_ALLOW: '/api/auth/token, /login',
       }),
     );
+    // The inspector and the plan runner get this policy: the login endpoints are not in it.
     expect(config.policy).toEqual({
       mode: 'read-only',
-      allowedMutations: ['/login', '/api/search', '/api/session/**'],
+      allowedMutations: ['/api/search', '/api/session/**'],
       allowedHosts: [],
     });
     expect(config.auth).toEqual({
       mode: 'form',
       user: 'user',
       loginPath: '/login',
+      loginMutationPaths: ['/login', '/api/auth/token'],
       userSelector: '#user',
       passwordSelector: '#pass',
       submitSelector: 'button[type=submit]',
@@ -292,5 +329,38 @@ describe('config redaction', () => {
     expect(config.anthropic.apiKey).toBe(SECRET_KEY);
     expect(config.auth.mode === 'form' ? config.auth.password : undefined).toBe(SECRET_PASSWORD);
     expect(JSON.stringify(config.jira)).toContain('qa@example.com');
+  });
+});
+
+describe('loadConfig login mutation paths', () => {
+  const formEnv = (overrides: NodeJS.ProcessEnv = {}) =>
+    baseEnv({
+      QA_ENV: 'production',
+      QA_AUTH_MODE: 'form',
+      TEST_USER: 'user',
+      TEST_PASSWORD: SECRET_PASSWORD,
+      QA_LOGIN_PATH: '/account/login?next=/home#form',
+      QA_LOGIN_USER_SELECTOR: '#user',
+      QA_LOGIN_PASSWORD_SELECTOR: '#pass',
+      QA_LOGIN_SUBMIT_SELECTOR: 'button',
+      ...overrides,
+    });
+
+  it('allows the login page path (without query or fragment) only during the login', () => {
+    const config = loadConfig(['verify'], formEnv());
+    expect(config.policy.allowedMutations).toEqual([]);
+    expect(config.auth.mode === 'form' ? config.auth.loginMutationPaths : undefined).toEqual(['/account/login']);
+  });
+
+  it('rejects QA_LOGIN_ALLOW without form login', () => {
+    const error = captureError(() => loadConfig(['verify'], baseEnv({ QA_LOGIN_ALLOW: '/api/auth' })));
+    expect(error.issues).toEqual(['QA_LOGIN_ALLOW requires QA_AUTH_MODE=form']);
+  });
+
+  it('keeps the login list in the redacted config', () => {
+    const config = loadConfig(['verify'], formEnv({ QA_LOGIN_ALLOW: '/api/auth' }));
+    const redacted = redactConfig(config);
+    expect(redacted.auth.mode === 'form' ? redacted.auth.loginMutationPaths : undefined).toEqual(['/account/login', '/api/auth']);
+    expect(redacted.policy.allowedMutations).toEqual([]);
   });
 });
