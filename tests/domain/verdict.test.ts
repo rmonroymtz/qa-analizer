@@ -47,6 +47,20 @@ describe('aggregateVerdict', () => {
     expect(aggregateVerdict(results, ticket)).toBe('INCONCLUSIVE');
   });
 
+  it('is INCONCLUSIVE when some criteria have no result, even if every result passed', () => {
+    expect(aggregateVerdict([result('AC-1', 'PASSED')], ticket)).toBe('INCONCLUSIVE');
+  });
+
+  it('ignores results for criteria that are not in the ticket', () => {
+    expect(aggregateVerdict([result('AC-1', 'PASSED'), result('AC-9', 'PASSED')], ticket)).toBe('INCONCLUSIVE');
+    const withUnknownFailure = [result('AC-1', 'PASSED'), result('AC-2', 'PASSED'), result('AC-9', 'FAILED')];
+    expect(aggregateVerdict(withUnknownFailure, ticket)).toBe('RESOLVED');
+  });
+
+  it('is NOT_RESOLVED when a criterion failed even if another criterion has no result', () => {
+    expect(aggregateVerdict([result('AC-1', 'FAILED')], ticket)).toBe('NOT_RESOLVED');
+  });
+
   it('is RESOLVED when every result passed', () => {
     const results = [result('AC-1', 'PASSED'), result('AC-2', 'PASSED')];
     expect(aggregateVerdict(results, ticket)).toBe('RESOLVED');

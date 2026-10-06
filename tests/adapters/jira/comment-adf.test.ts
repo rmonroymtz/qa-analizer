@@ -84,4 +84,21 @@ describe('buildVerificationCommentAdf', () => {
     expect(textOut).not.toContain('Attached');
     expect(blocks(doc).some((node) => node.type === 'bulletList')).toBe(false);
   });
+
+  it('never emits a text node with empty text', () => {
+    const doc = buildVerificationCommentAdf({
+      ...comment,
+      summary: '',
+      results: [{ criterionId: 'AC-1', status: 'INCONCLUSIVE', reason: '' }],
+    });
+    const emptyTexts: AdfNode[] = [];
+    const walk = (node: AdfNode) => {
+      if (node.type === 'text' && !node.text) emptyTexts.push(node);
+      (node.content ?? []).forEach(walk);
+    };
+    walk(doc);
+    expect(emptyTexts).toEqual([]);
+    expect(blocks(doc)[1]).toEqual({ type: 'paragraph', content: [] });
+    expect(adfToText(doc)).not.toContain('AC-1: ');
+  });
 });

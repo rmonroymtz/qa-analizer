@@ -15,12 +15,21 @@ export function exitCodeFor(verdict: Verdict): number {
 
 /**
  * Combines per-criterion results into a ticket verdict.
- * A failed business assertion wins over inconclusive results, because it is
- * positive evidence that the ticket is not resolved.
+ * Every acceptance criterion of the ticket must have a result: a criterion with
+ * no result counts as INCONCLUSIVE. Results for criteria that are not in the
+ * ticket are ignored. A failed business assertion wins over inconclusive
+ * results, because it is positive evidence that the ticket is not resolved.
  */
 export function aggregateVerdict(results: readonly CriterionResult[], ticket: Ticket): Verdict {
-  if (ticket.acceptanceCriteria.length === 0 || results.length === 0) return 'INCONCLUSIVE';
-  if (results.some((result) => result.status === 'FAILED')) return 'NOT_RESOLVED';
-  if (results.some((result) => result.status === 'INCONCLUSIVE')) return 'INCONCLUSIVE';
+  if (ticket.acceptanceCriteria.length === 0) return 'INCONCLUSIVE';
+  const statuses = ticket.acceptanceCriteria.map((criterion) => {
+    const own = results.filter((result) => result.criterionId === criterion.id);
+    if (own.length === 0) return 'INCONCLUSIVE';
+    if (own.some((result) => result.status === 'FAILED')) return 'FAILED';
+    if (own.some((result) => result.status === 'INCONCLUSIVE')) return 'INCONCLUSIVE';
+    return 'PASSED';
+  });
+  if (statuses.includes('FAILED')) return 'NOT_RESOLVED';
+  if (statuses.includes('INCONCLUSIVE')) return 'INCONCLUSIVE';
   return 'RESOLVED';
 }

@@ -17,7 +17,7 @@ export interface HttpReadinessProbeOptions {
   url: string;
   timeoutMs: number;
   intervalMs?: number;
-  /** When set, the response body must contain this SHA (full or first 7 chars). */
+  /** When set, the response body must report this SHA (full or first 7 chars) as a whole token. */
   expectedCommit?: string | undefined;
   requestTimeoutMs?: number;
   fetch?: typeof fetch;
@@ -42,6 +42,33 @@ function safeUrl(raw: string): string {
   } catch {
     return '<invalid url>';
   }
+}
+
+function collectStrings(value: unknown, into: string[]): string[] {
+  if (typeof value === 'string') into.push(value);
+  else if (Array.isArray(value)) value.forEach((item) => collectStrings(item, into));
+  else if (value !== null && typeof value === 'object') Object.values(value).forEach((item) => collectStrings(item, into));
+  return into;
+}
+
+/**
+ * True when the body reports the commit: the full SHA, or its 7-char short
+ * form, as a whole hex token (case-insensitive), so a hashed asset name such
+ * as `app.abc1234def.js` does not match the short SHA `abc1234`. A JSON body
+ * is checked through its string values only.
+ */
+export function bodyReportsCommit(body: string, commit: string): boolean {
+  const normalized = commit.trim().toLowerCase();
+  if (!/^[0-9a-f]+$/.test(normalized)) return false;
+  const token = (sha: string) => new RegExp(`(?<![0-9a-f])${sha}(?![0-9a-f])`, 'i');
+  const patterns = [token(normalized), token(normalized.slice(0, 7))];
+  let candidates: string[];
+  try {
+    candidates = collectStrings(JSON.parse(body), []);
+  } catch {
+    candidates = [body];
+  }
+  return candidates.some((candidate) => patterns.some((pattern) => pattern.test(candidate)));
 }
 
 /** Polls a URL until it answers 2xx (and, optionally, reports the expected commit). */
@@ -85,7 +112,7 @@ export class HttpReadinessProbe implements ReadinessProbe {
     const commit = this.options.expectedCommit;
     if (!commit) return undefined;
     const body = await response.text().catch(() => '');
-    if (body.includes(commit) || body.includes(commit.slice(0, 7))) return undefined;
+    if (bodyReportsCommit(body, commit)) return undefined;
     return `response does not report commit ${commit.slice(0, 7)} yet`;
   }
 }

@@ -83,6 +83,19 @@ describe('loadConfig', () => {
     expect(loadConfig(['verify'], baseEnv({ QA_TICKET: 'ABC-1' })).ticket).toBe('ABC-1');
   });
 
+  it('rejects an explicit ticket that is not a valid key, from the flag or QA_TICKET', () => {
+    expect(captureError(() => loadConfig(['verify', '--ticket', 'not a key'], baseEnv())).issues.join()).toMatch(/ticket/i);
+    expect(() => loadConfig(['verify'], baseEnv({ QA_TICKET: 'PROJ_1' }))).toThrow(ConfigError);
+  });
+
+  it('parses QA_JIRA_PROJECTS and enforces it on the explicit ticket', () => {
+    expect(loadConfig(['verify'], baseEnv()).jiraProjects).toEqual([]);
+    expect(loadConfig(['verify'], baseEnv({ QA_JIRA_PROJECTS: 'proj, shop ' })).jiraProjects).toEqual(['PROJ', 'SHOP']);
+    expect(loadConfig(['verify', '--ticket', 'shop-1'], baseEnv({ QA_JIRA_PROJECTS: 'PROJ,SHOP' })).ticket).toBe('SHOP-1');
+    expect(captureError(() => loadConfig(['verify', '--ticket', 'OTHER-1'], baseEnv({ QA_JIRA_PROJECTS: 'PROJ' }))).issues.join()).toContain('OTHER-1');
+    expect(captureError(() => loadConfig(['verify'], baseEnv({ QA_JIRA_PROJECTS: 'PROJ,bad-key' }))).issues.join()).toContain('QA_JIRA_PROJECTS');
+  });
+
   it('reads git context from Bitbucket variables', () => {
     const config = loadConfig(
       ['verify'],

@@ -193,6 +193,19 @@ describe('VerifyTicketUseCase', () => {
     expect((await verify(fromEnv, { explicitTicket: undefined, commitMessage: 'SHOP-5 from env' })).report.ticket?.key).toBe('SHOP-5');
   });
 
+  it('honors the configured Jira projects when resolving the key', async () => {
+    const h = harness({ readHeadCommitMessage: async () => 'OTHER-3 and SHOP-4' });
+    expect((await verify(h, { explicitTicket: undefined, jiraProjects: ['SHOP'] })).report.ticket?.key).toBe('SHOP-4');
+  });
+
+  it('INCONCLUSIVE as a setup error, without falling back, when the explicit key is invalid', async () => {
+    const h = harness();
+    const outcome = await verify(h, { explicitTicket: 'not a key', branch: 'feature/SHOP-7-x' });
+    expect(outcome.report).toMatchObject({ verdict: 'INCONCLUSIVE', ticket: null, configError: true });
+    expect(outcome.report.reason).toContain('Invalid ticket key');
+    expect(h.comments).toHaveLength(0);
+  });
+
   it('INCONCLUSIVE without a comment when no ticket key is found', async () => {
     const h = harness();
     const outcome = await verify(h, { explicitTicket: undefined });

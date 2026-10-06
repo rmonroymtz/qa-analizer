@@ -1,4 +1,5 @@
 import { inspect, parseArgs } from 'node:util';
+import { validateExplicitTicketKey } from '../application/resolve-ticket-key.js';
 import { policyFor, type Environment, type EnvironmentPolicy } from '../domain/environment.js';
 
 export type FailOnPolicy = 'not-resolved' | 'inconclusive' | 'never';
@@ -43,8 +44,10 @@ export interface ReadinessConfig {
 
 export interface AppConfig {
   command: 'verify';
-  /** Explicit ticket key from `--ticket` or `QA_TICKET`. */
+  /** Explicit ticket key from `--ticket` or `QA_TICKET`, validated and upper-cased. */
   ticket: string | undefined;
+  /** Jira project keys from `QA_JIRA_PROJECTS`; when non-empty, only their keys are accepted. */
+  jiraProjects: string[];
   environment: Environment;
   policy: EnvironmentPolicy;
   /** Start path or URL to inspect. */
@@ -76,6 +79,7 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_READY_TIMEOUT_MS = 300_000;
 const REDACTED = '***';
 const FAIL_ON_VALUES: readonly FailOnPolicy[] = ['not-resolved', 'inconclusive', 'never'];
+const PROJECT_KEY = /^[A-Z][A-Z0-9]+$/;
 const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
 function nonEmpty(value: string | undefined): string | undefined {
@@ -120,6 +124,7 @@ export function redactConfig(config: AppConfig): AppConfig {
   return {
     command: config.command,
     ticket: config.ticket,
+    jiraProjects: [...config.jiraProjects],
     environment: config.environment,
     policy: { ...config.policy, allowedMutations: [...config.policy.allowedMutations], allowedHosts: [...(config.policy.allowedHosts ?? [])] },
     startUrl: config.startUrl,
@@ -295,6 +300,17 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     issues.push('QA_READONLY_ALLOW_HOSTS must be a comma-separated list of bare hostnames (no scheme, port or path)');
   }
 
+  const jiraProjects = [...new Set(splitList(env.QA_JIRA_PROJECTS).map((project) => project.toUpperCase()))];
+  if (jiraProjects.some((project) => !PROJECT_KEY.test(project))) {
+    issues.push('QA_JIRA_PROJECTS must be a comma-separated list of Jira project keys such as PROJ');
+  }
+  let ticket = nonEmpty(flags.ticket) ?? nonEmpty(env.QA_TICKET);
+  if (ticket !== undefined) {
+    const validated = validateExplicitTicketKey(ticket, { projects: jiraProjects });
+    if ('problem' in validated) issues.push(`--ticket / QA_TICKET: ${validated.problem}`);
+    else ticket = validated.key;
+  }
+
   if (issues.length > 0) throw new ConfigError(issues);
 
   const allowedMutations = [
@@ -304,7 +320,8 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
 
   return protectSerialization({
     command: 'verify',
-    ticket: nonEmpty(flags.ticket) ?? nonEmpty(env.QA_TICKET),
+    ticket,
+    jiraProjects,
     environment,
     policy: policyFor(environment, [...new Set(allowedMutations)], [...new Set(allowedHosts)]),
     startUrl: nonEmpty(flags.url) ?? '/',

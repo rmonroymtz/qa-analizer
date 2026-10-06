@@ -103,6 +103,7 @@ async function verify(config: AppConfig, io: CliIo): Promise<number> {
       branch: config.git.branch,
       commit: config.git.commit,
       commitMessage: config.git.commitMessage,
+      jiraProjects: config.jiraProjects,
       environment: config.environment,
       policy: config.policy,
       targetBaseUrl: config.targetBaseUrl,

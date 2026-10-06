@@ -17,11 +17,16 @@ const VERDICT_EMOJI: Record<Verdict, string> = {
 
 const text = (value: string, strong = false): AdfNode =>
   strong ? { type: 'text', text: value, marks: [{ type: 'strong' }] } : { type: 'text', text: value };
-const paragraph = (...content: AdfNode[]): AdfNode => ({ type: 'paragraph', content });
+/** Jira rejects text nodes with empty text, so they are dropped; an empty paragraph keeps `content: []`. */
+const paragraph = (...content: AdfNode[]): AdfNode => ({
+  type: 'paragraph',
+  content: content.filter((node) => node.type !== 'text' || (node.text ?? '') !== ''),
+});
 const hardBreak: AdfNode = { type: 'hardBreak' };
 
 function criterionItem(result: CriterionResult): AdfNode {
-  const content: AdfNode[] = [text(`[${result.status}] ${result.criterionId}`, true), text(`: ${result.reason}`)];
+  const content: AdfNode[] = [text(`[${result.status}] ${result.criterionId}`, true)];
+  if (result.reason) content.push(text(`: ${result.reason}`));
   const { expected, actual } = result.evidence ?? {};
   if (expected !== undefined) content.push(hardBreak, text(`Expected: ${expected}`));
   if (actual !== undefined) content.push(hardBreak, text(`Actual: ${actual}`));

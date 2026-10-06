@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bodyReportsCommit,
   HttpReadinessProbe,
   ReadinessTimeoutError,
   readinessProbeFromConfig,
@@ -39,6 +40,29 @@ const unavailable = () => new Response('down', { status: 503 });
 const networkError = () => {
   throw new TypeError('fetch failed');
 };
+
+describe('bodyReportsCommit', () => {
+  const sha = 'abc1234def5678abc1234def5678abc1234def56';
+
+  it('matches the short SHA only as a whole hex token', () => {
+    expect(bodyReportsCommit('app.abc1234def.js', sha)).toBe(false);
+    expect(bodyReportsCommit('0abc1234', sha)).toBe(false);
+    expect(bodyReportsCommit('build abc1234 ok', sha)).toBe(true);
+    expect(bodyReportsCommit('build ABC1234-dirty', sha)).toBe(true);
+  });
+
+  it('matches the full SHA as a whole token, case-insensitively', () => {
+    expect(bodyReportsCommit(`commit=${sha.toUpperCase()}`, sha)).toBe(true);
+    expect(bodyReportsCommit(`commit=${sha}0`, sha)).toBe(false);
+  });
+
+  it('checks JSON string values', () => {
+    expect(bodyReportsCommit('{"version":"abc1234"}', sha)).toBe(true);
+    expect(bodyReportsCommit(`{"build":{"commit":"${sha}"}}`, sha)).toBe(true);
+    expect(bodyReportsCommit('{"assets":["app.abc1234def.js"]}', sha)).toBe(false);
+    expect(bodyReportsCommit('{"abc1234":"old"}', sha)).toBe(false);
+  });
+});
 
 describe('HttpReadinessProbe', () => {
   it('resolves on the first 2xx when no commit is expected', async () => {
@@ -85,6 +109,19 @@ describe('HttpReadinessProbe', () => {
       clock: fakeClock(),
     }).waitUntilReady();
     expect(full.calls()).toBe(1);
+  });
+
+  it('does not mistake a hashed asset name for the short SHA', async () => {
+    const sha = 'abc1234def5678abc1234def5678abc1234def56';
+    const { fetchFn, calls } = scriptedFetch([ok('<script src="/app.abc1234def.js"></script>'), ok('{"version":"abc1234"}')]);
+    await new HttpReadinessProbe({
+      url: 'https://app.example.com/version',
+      timeoutMs: 60_000,
+      expectedCommit: sha,
+      fetch: fetchFn,
+      clock: fakeClock(),
+    }).waitUntilReady();
+    expect(calls()).toBe(2);
   });
 
   it('throws ReadinessTimeoutError once the overall timeout elapses', async () => {

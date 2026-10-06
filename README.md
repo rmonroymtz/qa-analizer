@@ -43,7 +43,7 @@ A failed criterion wins over inconclusive ones: one FAILED makes the ticket NOT_
 
 ## How it works
 
-1. Find the ticket key: `--ticket` / `QA_TICKET`, then the branch name (`BITBUCKET_BRANCH`), then the commit message (`QA_COMMIT_MESSAGE` or the HEAD commit, including Bitbucket "Merged in feature/KEY-1-..." messages).
+1. Find the ticket key: `--ticket` / `QA_TICKET`, then the branch name (`BITBUCKET_BRANCH`), then the commit message (`QA_COMMIT_MESSAGE` or the HEAD commit, including Bitbucket "Merged in feature/KEY-1-..." messages). In a branch name the key must start a path segment (`feature/PROJ-123-x`); in free-form commit text it must be an upper-case whole word. Look-alike prefixes such as `UTF-8`, `SHA-256`, `ISO-8601`, `HTTP-2` or `release-2` are ignored; set `QA_JIRA_PROJECTS` to accept only your projects.
 2. Wait until the deploy is live (`QA_READY_URL` reporting `BITBUCKET_COMMIT`, or `TARGET_BASE_URL` answering 2xx).
 3. Read the ticket and its acceptance criteria from Jira.
 4. Log in, when configured (hand-written form login, never AI-generated).
@@ -90,7 +90,8 @@ A configuration error (missing or invalid variables) always exits 2 and prints e
 | `JIRA_AC_FIELD` | No | Custom field id with the acceptance criteria; otherwise they are read from the description |
 | `ANTHROPIC_API_KEY` | Yes in CI (secured) | Claude API key; locally the SDK can also use other credential sources |
 | `QA_MODEL` | No | Model override, default `claude-opus-5-5` |
-| `QA_TICKET` | No | Explicit ticket key |
+| `QA_TICKET` | No | Explicit ticket key. An invalid value is a configuration error (exit 2), never a silent fallback |
+| `QA_JIRA_PROJECTS` | No | Comma-separated Jira project keys (e.g. `PROJ,SHOP`). When set, only keys of these projects are accepted, from any source |
 | `QA_COMMIT_MESSAGE` | No | Commit message to search for the key (default: HEAD commit) |
 | `QA_READY_URL` | No | Health/version URL that reports the deployed commit |
 | `QA_READY_TIMEOUT_MS` | No | Readiness timeout, default `300000` |

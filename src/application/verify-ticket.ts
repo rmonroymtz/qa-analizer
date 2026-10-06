@@ -8,7 +8,7 @@ import type { TestGenerator } from '../ports/test-generator.js';
 import type { TestRunner } from '../ports/test-runner.js';
 import type { TicketCommenter } from '../ports/ticket-commenter.js';
 import type { TicketRepository } from '../ports/ticket-repository.js';
-import { resolveTicketKey, type TicketKeySource } from './resolve-ticket-key.js';
+import { InvalidTicketKeyError, resolveTicketKey, type TicketKeyCandidates, type TicketKeySource } from './resolve-ticket-key.js';
 
 export interface VerifyTicketRequest {
   explicitTicket: string | undefined;
@@ -16,6 +16,8 @@ export interface VerifyTicketRequest {
   commit: string | undefined;
   /** Overrides the HEAD commit message (QA_COMMIT_MESSAGE). */
   commitMessage: string | undefined;
+  /** Jira project keys (QA_JIRA_PROJECTS); when non-empty, only their keys are accepted. */
+  jiraProjects?: readonly string[] | undefined;
   environment: Environment;
   policy: EnvironmentPolicy;
   targetBaseUrl: string;
@@ -260,9 +262,18 @@ export class VerifyTicketUseCase {
     const { deps } = this;
     const candidates = { explicit: request.explicitTicket, branch: request.branch };
     // The HEAD commit is read only when neither the explicit key nor the branch (e.g. `main`) has one.
+    const resolve = (all: TicketKeyCandidates) => {
+      try {
+        return resolveTicketKey(all, { projects: request.jiraProjects });
+      } catch (error) {
+        // An invalid explicit key is a setup problem: never fall back to another source.
+        if (error instanceof InvalidTicketKeyError) throw new StepFailure(error.message, false, true);
+        throw error;
+      }
+    };
     const resolved =
-      resolveTicketKey({ ...candidates, commitMessage: request.commitMessage }) ??
-      (request.commitMessage === undefined ? resolveTicketKey({ ...candidates, commitMessage: await deps.readHeadCommitMessage() }) : null);
+      resolve({ ...candidates, commitMessage: request.commitMessage }) ??
+      (request.commitMessage === undefined ? resolve({ ...candidates, commitMessage: await deps.readHeadCommitMessage() }) : null);
     if (resolved === null) throw new StepFailure('ticket key not found', false, false);
     state.key = resolved.key;
     state.keySource = resolved.source;
