@@ -35,7 +35,7 @@ Manual verification of deployed tickets is slow and inconsistent. AI-generated t
 
 - [x] T1 — Scaffold + domain + config + ticket key resolution (TS project, vitest, Verdict/Ticket/AcceptanceCriterion, env/CLI config parsing, ticket key resolver). Route: delegated (2+ non-trivial files).
 - [x] T2 — Jira adapter (fetch issue, ADF→text, AC field from `JIRA_AC_FIELD` or description, comment in ADF, attach screenshot). Route: delegated.
-- [ ] T3 — Playwright inspector + auth setup + production read-only guard + readiness wait. Route: delegated.
+- [x] T3 — Playwright inspector + auth setup + production read-only guard + readiness wait. Route: delegated.
 - [ ] T4 — Claude test generator (prompt with ticket + aria snapshot + env policy, structured output → spec code + criterion mapping). Route: delegated.
 - [ ] T5 — Playwright runner + result classifier (assertion failure vs locator/timeout → verdict per criterion). Route: delegated.
 - [ ] T6 — VerifyTicket use case + CLI wiring + exit codes + report + Jira comment composition. Route: delegated.
@@ -55,8 +55,10 @@ Manual verification of deployed tickets is slow and inconsistent. AI-generated t
 
 - T1 (delegated writer): scaffold (TS 7 strict ESM/NodeNext, vitest 5), domain (Verdict, Ticket, CriterionResult, EnvironmentPolicy), ports, `loadConfig` + `redactConfig`, `resolveTicketKey`, `readHeadCommitMessage`. RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 38/38 pass; `npm run build` pass. Commit: `e1189de` feat: scaffold project with domain, config and ticket key resolution.
 
-- T2 (delegated writer): `JiraClient` (basic auth, injectable fetch, `JiraError` with status, credentials scrubbed), `adfToText`, `extractAcceptanceCriteria` (custom field ADF/string, description heading/paragraph label in EN/ES, plain-text fallback), `buildVerificationCommentAdf`, `JiraTicketRepository`, `JiraTicketCommenter` (attachments first; upload failures reported in the comment). RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 64/64 pass; `npm run build` pass. Commit: feat(jira): add Jira ticket repository and verification commenter.
+- T2 (delegated writer): `JiraClient` (basic auth, injectable fetch, `JiraError` with status, credentials scrubbed), `adfToText`, `extractAcceptanceCriteria` (custom field ADF/string, description heading/paragraph label in EN/ES, plain-text fallback), `buildVerificationCommentAdf`, `JiraTicketRepository`, `JiraTicketCommenter` (attachments first; upload failures reported in the comment). RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 64/64 pass; `npm run build` pass. Commit: `1af5612` feat(jira): add Jira ticket repository and verification commenter.
+
+- T3 (delegated writer): `shouldBlockRequest` + `installReadOnlyGuard` (mutating methods to the target host blocked unless the path matches an allowed glob or `^regex`; invalid patterns fail closed), `performFormLogin` + `LoginError` (credentials scrubbed, context always closed), `PlaywrightPageInspector` + `truncateSnapshot` (default 30000 chars), `HttpReadinessProbe` + `readinessProbeFromConfig` + `ReadinessTimeoutError` (injectable fetch and clock). Playwright 1.63 APIs (`locator.ariaSnapshot`, `context.route`, `route.abort`) confirmed against the installed type definitions. No real browser in unit tests (login tested with a fake browser). RED observed (missing modules) before GREEN. Checks: `npm run typecheck` pass; `npm test` 98/98 pass; `npm run build` pass. Commit: feat(playwright): add page inspector, read-only guard, form login and readiness probe.
 
 ## Next step
 
-T3.
+T4.
