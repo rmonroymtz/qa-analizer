@@ -1,0 +1,7 @@
+node_modules/
+dist/
+qa-report/
+.auth/
+test-results/
+playwright-report/
+.env
