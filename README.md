@@ -18,6 +18,8 @@ export ANTHROPIC_API_KEY=...
 node dist/cli/main.js verify --env staging --ticket SHOP-42 --dry-run
 ```
 
+Alternatively, keep the variables in a file: `cp env.example .env`, fill it in, and run `node --env-file=.env dist/cli/main.js verify ...`. The `.env` file is git-ignored.
+
 Expected result: a summary on stdout, and `qa-report/report.json` plus `qa-report/summary.md`. `--dry-run` skips the Jira comment.
 
 ## Verdicts
@@ -88,6 +90,8 @@ A configuration error (missing or invalid variables) always exits 2 and prints e
 Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on never` always exits 0.
 
 ## Environment variables
+
+`env.example` lists every variable with comments and no secret values.
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
