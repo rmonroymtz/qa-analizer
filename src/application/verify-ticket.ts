@@ -1,5 +1,6 @@
 import type { CriterionResult } from '../domain/criterion-result.js';
 import type { Environment, EnvironmentPolicy } from '../domain/environment.js';
+import type { TestPlan } from '../domain/test-plan.js';
 import type { Ticket } from '../domain/ticket.js';
 import { aggregateVerdict, type Verdict } from '../domain/verdict.js';
 import type { PageInspector, PageSnapshot } from '../ports/page-inspector.js';
@@ -29,10 +30,12 @@ export interface VerifyTicketRequest {
   secrets: string[];
 }
 
-/** Persists the report and prints progress. */
+/** Persists the report and artifacts, and prints progress. */
 export interface Reporter {
   /** Writes report.json and summary.md; returns the report path. */
   write(report: VerificationReport, summaryMarkdown: string): Promise<string>;
+  /** Writes a text artifact at a fixed path relative to the output directory; returns its path. */
+  writeArtifact(relativePath: string, content: string): Promise<string>;
   log(message: string): void;
 }
 
@@ -47,6 +50,8 @@ export interface VerifyTicketDeps {
   /** Builds an inspector bound to the (optional) authenticated session. */
   inspectorFor(storageStatePath: string | undefined): PageInspector;
   generator: TestGenerator;
+  /** Renders the plan as a readable spec, an artifact for humans that is never executed. */
+  renderPlanSpec(plan: TestPlan, baseUrl: string): string;
   runner: TestRunner;
   /** Present only when form login is configured; returns the storage state path. */
   login?: (() => Promise<string>) | undefined;
@@ -140,10 +145,14 @@ function redactText(text: string, secrets: string[]): string {
   return secrets.reduce((current, secret) => (secret ? current.split(secret).join('***') : current), text);
 }
 
-/** Scrubs every secret from every string in the report. */
-function redactReport(report: VerificationReport, secrets: string[]): VerificationReport {
+/** Scrubs every secret from every string of a JSON-serializable value. */
+function redactJson<T>(value: T, secrets: string[]): T {
   const escaped = secrets.filter((secret) => secret.length > 0).map((secret) => JSON.stringify(secret).slice(1, -1));
-  return JSON.parse(redactText(JSON.stringify(report), escaped)) as VerificationReport;
+  return JSON.parse(redactText(JSON.stringify(value), escaped)) as T;
+}
+
+function redactReport(report: VerificationReport, secrets: string[]): VerificationReport {
+  return redactJson(report, secrets);
 }
 
 function countSummary(results: CriterionResult[]): string {
@@ -321,14 +330,16 @@ export class VerifyTicketUseCase {
     });
     if (snapshots.length === 0) throw new StepFailure(`page inspection failed: ${failures.join('; ')}`, true, false);
 
-    const suite = await this.timed(state, 'generate', () =>
+    const plan = await this.timed(state, 'generate', () =>
       deps.generator.generate({ ticket, snapshots, baseUrl: request.targetBaseUrl, policy: request.policy, authenticated: storageStatePath !== undefined }),
     ).catch((error: unknown) => {
       throw new StepFailure(`test generation failed: ${errorMessage(error)}`, true, isConfigFailure(error));
     });
 
+    await this.writePlanArtifacts(plan, request);
+
     return this.timed(state, 'run', () =>
-      deps.runner.run(suite, {
+      deps.runner.run(plan, {
         baseUrl: request.targetBaseUrl,
         environment: request.environment,
         policy: request.policy,
@@ -337,6 +348,22 @@ export class VerifyTicketUseCase {
         ticket,
       }),
     );
+  }
+
+  /** Writes `plan.json` and the review-only `generated/plan.spec.ts`; failures are logged, never fatal. */
+  private async writePlanArtifacts(plan: TestPlan, request: VerifyTicketRequest): Promise<void> {
+    const redacted = redactJson(plan, request.secrets);
+    const artifacts: [string, () => string][] = [
+      ['plan.json', () => `${JSON.stringify(redacted, null, 2)}\n`],
+      ['generated/plan.spec.ts', () => this.deps.renderPlanSpec(redacted, request.targetBaseUrl)],
+    ];
+    for (const [path, content] of artifacts) {
+      try {
+        await this.deps.reporter.writeArtifact(path, content());
+      } catch (error) {
+        this.deps.reporter.log(`Could not write ${path}: ${redactText(errorMessage(error), request.secrets)}`);
+      }
+    }
   }
 
   private async postComment(

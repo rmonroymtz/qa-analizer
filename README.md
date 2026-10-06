@@ -1,6 +1,6 @@
 # qa-analyzer
 
-Verifies a deployed Jira ticket after each deploy. It reads the ticket's acceptance criteria, has Claude write Playwright tests grounded in the live page structure, runs them against the deployed site, and reports **RESOLVED**, **NOT_RESOLVED** or **INCONCLUSIVE**. When the result is not RESOLVED, it comments on the ticket with the evidence.
+Verifies a deployed Jira ticket after each deploy. It reads the ticket's acceptance criteria, has Claude write a declarative test plan grounded in the live page structure, executes the plan in a browser with Playwright against the deployed site, and reports **RESOLVED**, **NOT_RESOLVED** or **INCONCLUSIVE**. When the result is not RESOLVED, it comments on the ticket with the evidence.
 
 It runs as a step in Bitbucket Pipelines, right after the deploy step.
 
@@ -27,21 +27,24 @@ Expected result: a summary on stdout, and `qa-report/report.json` plus `qa-repor
 | Verdict | Meaning | Jira comment |
 |---------|---------|--------------|
 | RESOLVED | Every acceptance criterion passed. | No |
-| NOT_RESOLVED | At least one business assertion (`expect`) failed. That is positive evidence that the ticket is not done. | Yes, with up to 3 failure screenshots |
+| NOT_RESOLVED | At least one business assertion step failed on an element that was found (or on the URL or title). That is positive evidence that the ticket is not done. | Yes, with up to 3 failure screenshots |
 | INCONCLUSIVE | The tool could not decide. | Yes, unless the key was not found or Jira itself failed |
 
-**Why INCONCLUSIVE exists.** AI-generated tests can fail for reasons unrelated to the ticket: a locator that does not match the page, a timeout, a blocked request in production, a generation refusal. Reporting those as NOT_RESOLVED would create false alarms and erode trust. So only a failed `expect` assertion counts as a failure. Everything that stops a test from reaching or identifying its target is INCONCLUSIVE.
+**Why INCONCLUSIVE exists.** AI-planned tests can fail for reasons unrelated to the ticket: a locator that does not match the page, a timeout, a blocked request in production, a generation refusal. Reporting those as NOT_RESOLVED would create false alarms and erode trust. So only a failed assertion step (`expect*`) whose target was found counts as a failure. Everything that stops a test from reaching or identifying its target is INCONCLUSIVE.
 
 | Situation | Criterion result |
 |-----------|------------------|
 | Test passed | PASSED |
 | Test passed only on its retry (read-only mode only) | PASSED, with the note "passed on retry" |
-| `expect(...)` assertion failed | FAILED, with expected/actual and a screenshot |
-| Assertion target not found, strict mode violation | INCONCLUSIVE |
-| Action or navigation error, timeout, blocked request | INCONCLUSIVE |
-| Spec failed to compile, test skipped | INCONCLUSIVE |
-| Test marked `test.fail`, `test.fixme` or `test.skip` | INCONCLUSIVE, "test was marked fail/fixme/skip" (never PASSED) |
+| Assertion step failed on a found element, or on the URL or title | FAILED, with the step, expected/actual and a screenshot |
+| Assertion target matches no element | INCONCLUSIVE, "expected element not found: the feature may be missing or the UI changed — needs human review" |
+| Assertion target matches several elements without `nth` | INCONCLUSIVE |
+| Action or navigation error, step timeout, test over its 90 s budget | INCONCLUSIVE, with the step number and action |
+| Assertion failed after the read-only guard blocked a request to the target host | INCONCLUSIVE (the block may be the cause) |
+| Mutating test in read-only mode | INCONCLUSIVE, "mutating test skipped in read-only mode" (never executed) |
 | Criterion not verifiable from the UI (Claude says so) | INCONCLUSIVE, with the reason |
+
+Blocked requests are listed in the criterion reason. The classification of a missing assertion target is a pending product decision; it lives in one place (`src/adapters/playwright/step-classification.ts`).
 
 A failed criterion wins over inconclusive ones: one FAILED makes the ticket NOT_RESOLVED.
 
@@ -52,8 +55,22 @@ A failed criterion wins over inconclusive ones: one FAILED makes the ticket NOT_
 3. Read the ticket and its acceptance criteria from Jira.
 4. Log in, when configured (hand-written form login, never AI-generated).
 5. Capture the accessibility snapshot of the start page plus up to two more same-host pages mentioned in the ticket.
-6. Ask Claude for one Playwright spec, one test per criterion, using only locators found in the snapshots.
-7. Run the spec, classify each criterion, write the report, and comment on Jira.
+6. Ask Claude for a **test plan**: JSON data, at most one test per criterion, built from a closed step vocabulary and semantic locators found in the snapshots. The plan is validated (shape, limits, relative paths, ARIA roles, criterion coverage) before anything runs.
+7. Interpret the plan in this process with the Playwright library, classify each criterion, write the report, and comment on Jira.
+
+### The test plan
+
+Claude never writes code, and qa-analyzer never executes model-written code. A plan is a list of tests; each test is a list of at most 30 steps:
+
+| Kind | Actions |
+|------|---------|
+| Navigation | `goto { path }`: a path relative to `TARGET_BASE_URL` (starts with one `/`; no scheme, host, backslash or `..`) |
+| Interaction | `click`, `check`, `uncheck`, `hover`, `fill { value }`, `selectOption { value }`, `press { key }`, `waitFor { state }` |
+| Assertion | `expectVisible`, `expectHidden`, `expectText { text, match }`, `expectValue { value }`, `expectCount { count }`, `expectUrl { pathPattern }` (plain substring), `expectTitle { text, match }` |
+
+Targets are semantic only: `role` (+ accessible `name`), `label`, `text`, `placeholder` or `testId`, with an optional `nth` and one optional parent (`within`). There are no CSS, XPath or raw selectors. Every test needs at least one assertion, and Claude marks tests that change data as `mutating`.
+
+Each test runs in a fresh browser context (service workers blocked, downloads refused). In production the read-only guard is installed on that context by qa-analyzer, before any page exists, and nothing in the plan can remove it. Step timeouts: 10 s for actions and assertions, 30 s for navigation, 90 s per test.
 
 ## CLI
 
@@ -117,7 +134,7 @@ Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on ne
 | `QA_READONLY_ALLOW_HOSTS` | No | Hostnames to which any mutation is allowed in production (e.g. analytics) |
 | `BITBUCKET_BRANCH`, `BITBUCKET_COMMIT`, `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | Set by Bitbucket | Key resolution, readiness and environment |
 
-Secrets are only read from the environment, are never printed, and are scrubbed from reports. The test process does not receive credential variables.
+Secrets are only read from the environment, are never printed, and are scrubbed from reports and plan artifacts. Tests are plan data interpreted by qa-analyzer, so no generated code can read the environment.
 
 ## Production safety (read-only mode)
 
@@ -127,10 +144,11 @@ Secrets are only read from the environment, are never printed, and are scrubbed 
 - Exceptions: the login path, paths in `QA_READONLY_ALLOW` (on the target host only), and hosts in `QA_READONLY_ALLOW_HOSTS`.
 - Service workers are blocked, and WebSocket connections are closed for every host except those in `QA_READONLY_ALLOW_HOSTS`.
 - The run fails closed: if the guard cannot be installed (for example, `TARGET_BASE_URL` does not parse), nothing runs.
-- Claude is told not to submit forms or click mutating buttons, and to mark such criteria as uncoverable.
-- The Playwright `request` fixture is disabled, and a spec that uses a Node-side HTTP client is refused before it runs.
+- The guard is installed by qa-analyzer on every test's browser context before the page is created. The plan vocabulary has no way to remove routes, change context options or send HTTP requests outside the page.
+- Claude is told to list criteria that need a mutation as uncoverable. A test it marks `mutating` is moved to uncoverable by the validator and is never executed.
+- Non-mutating interactions (opening a menu, typing in a search box) are allowed; the network guard is the authoritative enforcement.
 
-A blocked request shows up as `net::ERR_BLOCKED_BY_CLIENT` and makes the criterion INCONCLUSIVE, never NOT_RESOLVED.
+A blocked request is listed in the criterion reason. An assertion that fails after a request to the target host was blocked is INCONCLUSIVE, never NOT_RESOLVED.
 
 ## Login setup
 
@@ -151,20 +169,18 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 |------|---------|
 | `qa-report/report.json` | Verdict, ticket key and its source, environment, commit, per-criterion results, timings. No secrets. |
 | `qa-report/summary.md` | Human-readable summary |
-| `qa-report/generated/` | The generated spec, fixtures and Playwright config |
-| `qa-report/results.json` | Raw Playwright JSON report |
-| `qa-report/test-results/` | Screenshots of failed tests, and traces only for unauthenticated full-mode runs |
+| `qa-report/plan.json` | The validated test plan that was executed |
+| `qa-report/generated/plan.spec.ts` | The plan rendered as a readable Playwright spec, **for human review only**; qa-analyzer never executes it |
+| `qa-report/screenshots/<criterion>.png` | Full-page screenshot of each failed or inconclusive test |
 
-**Traces are off for authenticated and read-only runs.** A Playwright trace records request headers and cookies, including the session from the login step, and `qa-report/**` is uploaded as a pipeline artifact. So traces (`retain-on-failure`) are kept only when the run has no session and is not read-only; otherwise `trace: 'off'`. Screenshots are always kept on failure.
+**No traces.** A Playwright trace records request headers and cookies, including the session from the login step, and `qa-report/**` is uploaded as a pipeline artifact, so no traces are recorded.
 
-**Retries.** Full mode (staging) runs each test once (`retries: 0`), because a retry could replay a mutation. Read-only mode allows one retry; a test that passes only on its retry is PASSED with the note "passed on retry".
-
-**Timeouts.** The Playwright CLI runs in its own process group. When the run exceeds its time limit, the whole group (CLI, workers and browsers) is killed.
+**Retries.** Full mode (staging) runs each test once, because a retry could replay a mutation. Read-only mode retries a failed or inconclusive test once; a test that passes only on its retry is PASSED with the note "passed on retry".
 
 ## Known limitations
 
 - **Single snapshot.** Claude sees each page once, before any interaction. Elements that appear only after clicks or navigation are not in the snapshot, so tests for them are more likely to be INCONCLUSIVE.
-- **AI-generated code runs in CI.** The spec passes a static check (only the fixtures import; no `require`, `process.env`, child processes, dynamic imports, `test.only`, `test.fail` or `test.fixme`; every criterion id at most once) and runs without credential variables, but it is still model-written code. Run it in an isolated container, in its own step, with no extra secrets.
+- **Closed vocabulary.** Checks that the step vocabulary cannot express (for example, visual layout, downloads, or API responses) are reported as uncoverable.
 - **One ticket per run.** Only the main ticket of the deploy is verified.
 - **Up to three pages** are inspected: the start page and two same-host pages mentioned in the ticket.
 - **Read-only covers the browser.** Mutations made by the site's own servers as a side effect of a GET are outside the guard's reach.

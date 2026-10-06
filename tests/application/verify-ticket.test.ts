@@ -9,9 +9,9 @@ import {
   type VerifyTicketRequest,
 } from '../../src/application/verify-ticket.js';
 import type { CriterionResult } from '../../src/domain/criterion-result.js';
+import type { TestPlan } from '../../src/domain/test-plan.js';
 import type { Ticket } from '../../src/domain/ticket.js';
 import type { PageInspector } from '../../src/ports/page-inspector.js';
-import type { GeneratedSuite } from '../../src/ports/test-generator.js';
 import type { RunContext } from '../../src/ports/test-runner.js';
 import type { VerificationComment } from '../../src/ports/ticket-commenter.js';
 
@@ -28,11 +28,10 @@ const ticket: Ticket = {
   url: 'https://acme.atlassian.net/browse/SHOP-42',
 };
 
-const suite: GeneratedSuite = {
-  specCode: "import { test, expect } from './qa-fixtures';",
-  criteria: [
-    { criterionId: 'AC-1', testTitle: '[AC-1] a' },
-    { criterionId: 'AC-2', testTitle: '[AC-2] b' },
+const plan: TestPlan = {
+  tests: [
+    { criterionId: 'AC-1', title: '[AC-1] a', mutating: false, steps: [{ action: 'expectTitle', text: 'Sale', match: 'contains' }] },
+    { criterionId: 'AC-2', title: `[AC-2] b ${SECRET}`, mutating: false, steps: [{ action: 'expectTitle', text: 'Price', match: 'contains' }] },
   ],
   uncoverable: [],
 };
@@ -75,15 +74,21 @@ interface Harness {
   runContexts: RunContext[];
   storageStates: (string | undefined)[];
   generated: { authenticated: boolean; snapshots: number }[];
+  artifacts: Map<string, string>;
+  runPlans: TestPlan[];
 }
 
 function harness(overrides: Partial<VerifyTicketDeps> = {}, options: { results?: CriterionResult[]; failInspect?: (url: string) => boolean } = {}): Harness {
-  const h: Harness = { comments: [], written: [], logs: [], inspected: [], runContexts: [], storageStates: [], generated: [] } as unknown as Harness;
+  const h: Harness = { comments: [], written: [], logs: [], inspected: [], runContexts: [], storageStates: [], generated: [], artifacts: new Map(), runPlans: [] } as unknown as Harness;
   let time = 1_000;
   const reporter: Reporter = {
     write: async (report) => {
       h.written.push(report);
       return '/out/report.json';
+    },
+    writeArtifact: async (relativePath, content) => {
+      h.artifacts.set(relativePath, content);
+      return `/out/${relativePath}`;
     },
     log: (message) => h.logs.push(message),
   };
@@ -108,11 +113,13 @@ function harness(overrides: Partial<VerifyTicketDeps> = {}, options: { results?:
     generator: {
       generate: async (input) => {
         h.generated.push({ authenticated: input.authenticated, snapshots: input.snapshots.length });
-        return suite;
+        return plan;
       },
     },
+    renderPlanSpec: (generated, baseUrl) => `// spec for ${baseUrl}: ${generated.tests.map((test) => test.title).join(', ')}`,
     runner: {
-      run: async (_suite, ctx) => {
+      run: async (runPlan, ctx) => {
+        h.runPlans.push(runPlan);
         h.runContexts.push(ctx);
         return options.results ?? passed;
       },
@@ -130,6 +137,27 @@ async function verify(h: Harness, request: Partial<VerifyTicketRequest> = {}) {
 }
 
 describe('VerifyTicketUseCase', () => {
+  it('writes the validated plan and the review-only spec before running the plan', async () => {
+    const h = harness();
+    await verify(h);
+    expect(JSON.parse(h.artifacts.get('plan.json') ?? '{}')).toEqual({
+      ...plan,
+      tests: [plan.tests[0], { ...plan.tests[1], title: '[AC-2] b ***' }],
+    });
+    expect(h.artifacts.get('generated/plan.spec.ts')).toBe('// spec for https://shop.example.com: [AC-1] a, [AC-2] b ***');
+    expect(h.runPlans[0]).toBe(plan);
+  });
+
+  it('still runs the plan when the artifacts cannot be written', async () => {
+    const h = harness();
+    h.deps.reporter.writeArtifact = async () => {
+      throw new Error('disk full');
+    };
+    const outcome = await verify(h);
+    expect(outcome.report.verdict).toBe('RESOLVED');
+    expect(h.logs).toContain('Could not write plan.json: disk full');
+  });
+
   it('RESOLVED: runs every step, writes the report and does not comment', async () => {
     const h = harness();
     const outcome = await verify(h);
@@ -325,7 +353,7 @@ describe('VerifyTicketUseCase', () => {
   });
 
   it('still returns an outcome when the report cannot be written', async () => {
-    const h = harness({ reporter: { write: async () => { throw new Error('disk full'); }, log: () => undefined } });
+    const h = harness({ reporter: { write: async () => { throw new Error('disk full'); }, writeArtifact: async (path) => path, log: () => undefined } });
     const outcome = await verify(h);
     expect(outcome.report.verdict).toBe('RESOLVED');
     expect(outcome.reportPath).toBeUndefined();

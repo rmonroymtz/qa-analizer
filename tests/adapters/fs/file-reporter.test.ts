@@ -19,4 +19,25 @@ describe('FileReporter', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('writes an artifact under the output directory, creating subdirectories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'qa-reporter-'));
+    try {
+      const reporter = new FileReporter(root, () => undefined);
+      const path = await reporter.writeArtifact('generated/plan.spec.ts', '// spec');
+      expect(path).toBe(join(root, 'generated', 'plan.spec.ts'));
+      expect(await readFile(path, 'utf8')).toBe('// spec');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an artifact path outside the output directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'qa-reporter-'));
+    try {
+      await expect(new FileReporter(join(root, 'out'), () => undefined).writeArtifact('../escape.txt', 'x')).rejects.toThrow(/outside/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ClaudeTestGenerator,
-  GenerationError,
-  validateGeneratedSuite,
-  type MessagesStreamClient,
-} from '../../../src/adapters/anthropic/claude-test-generator.js';
+import { ClaudeTestGenerator, GenerationError, type MessagesStreamClient } from '../../../src/adapters/anthropic/claude-test-generator.js';
+import { PLAN_OUTPUT_SCHEMA } from '../../../src/adapters/anthropic/plan-prompt.js';
+import type { TestPlan } from '../../../src/domain/test-plan.js';
 import type { Ticket } from '../../../src/domain/ticket.js';
 import type { GenerationInput } from '../../../src/ports/test-generator.js';
 
@@ -19,100 +16,36 @@ const ticket: Ticket = {
   url: 'https://acme.atlassian.net/browse/SHOP-42',
 };
 
-const SPEC = [
-  "import { test, expect } from './qa-fixtures';",
-  '',
-  "test('[AC-1] Badge shown', async ({ page }) => {",
-  "  await page.goto('/sale');",
-  "  await expect(page.getByText('Sale'), 'badge is visible').toBeVisible();",
-  '});',
-].join('\n');
-
-const validSuite = {
-  specCode: SPEC,
-  criteria: [{ criterionId: 'AC-1', testTitle: '[AC-1] Badge shown' }],
+/** The structured output, in the wire format of PLAN_OUTPUT_SCHEMA. */
+const wirePlan = {
+  tests: [
+    {
+      criterionId: 'AC-1',
+      title: '[AC-1] Badge shown',
+      mutating: false,
+      steps: [
+        { action: 'goto', path: '/sale' },
+        { action: 'expectVisible', target: { by: 'text', value: 'Sale', exact: true } },
+      ],
+    },
+  ],
   uncoverable: [{ criterionId: 'AC-2', reason: 'Placing an order mutates data in read-only mode' }],
 };
 
-describe('validateGeneratedSuite', () => {
-  it('accepts a suite that covers every criterion', () => {
-    expect(validateGeneratedSuite(validSuite, ticket)).toEqual(validSuite);
-  });
-
-  it('rejects a non-object or a wrongly shaped payload', () => {
-    expect(() => validateGeneratedSuite(null, ticket)).toThrow(GenerationError);
-    expect(() => validateGeneratedSuite({ ...validSuite, specCode: 3 }, ticket)).toThrow(GenerationError);
-    expect(() => validateGeneratedSuite({ ...validSuite, criteria: 'x' }, ticket)).toThrow(GenerationError);
-    expect(() => validateGeneratedSuite({ ...validSuite, uncoverable: [{ criterionId: 'AC-2' }] }, ticket)).toThrow(GenerationError);
-  });
-
-  it('rejects a suite that omits a criterion', () => {
-    expect(() => validateGeneratedSuite({ ...validSuite, uncoverable: [] }, ticket)).toThrow(/AC-2/);
-  });
-
-  it('rejects unknown criterion ids', () => {
-    const suite = { ...validSuite, criteria: [...validSuite.criteria, { criterionId: 'AC-9', testTitle: '[AC-9] x' }] };
-    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(/AC-9/);
-  });
-
-  it.each([
-    [
-      'within criteria',
-      {
-        criteria: [
-          { criterionId: 'AC-1', testTitle: '[AC-1] Badge shown' },
-          { criterionId: 'AC-1', testTitle: '[AC-1] Badge shown again' },
-        ],
-      },
-    ],
-    [
-      'within uncoverable',
-      {
-        uncoverable: [
-          { criterionId: 'AC-2', reason: 'mutates data' },
-          { criterionId: 'AC-2', reason: 'needs a payment' },
-        ],
-      },
-    ],
-    ['in both criteria and uncoverable', { uncoverable: [...validSuite.uncoverable, { criterionId: 'AC-1', reason: 'also not coverable' }] }],
-  ])('rejects duplicate criterion ids %s', (_label, overrides) => {
-    const suite = { ...validSuite, ...overrides };
-    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(GenerationError);
-    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(/duplicate criterion ids: AC-\d/);
-  });
-
-  it('requires the qa-fixtures import', () => {
-    const suite = { ...validSuite, specCode: SPEC.replace("import { test, expect } from './qa-fixtures';", '') };
-    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(/qa-fixtures/);
-  });
-
-  it.each([
-    ['require(', "const fs = require('fs');"],
-    ['child_process', "// uses child_process"],
-    ['process.env', 'const t = process.env.SECRET;'],
-    ['dynamic import', "const m = await import('node:fs');"],
-    ['other import', "import fs from 'node:fs';"],
-    ['playwright import', "import { test } from '@playwright/test';"],
-    ['test.fail', "test.fail('[AC-1] expected to fail', async () => {});"],
-    ['test.fixme', "test.fixme('[AC-1] later', async () => {});"],
-    ['test.only', "test.only('[AC-1] focused', async () => {});"],
-    ['test.describe.only', "test.describe.only('focused', () => {});"],
-    ['test.fail() inside a test', '  test.fail();'],
-  ])('rejects unsafe spec code: %s', (_label, line) => {
-    const suite = { ...validSuite, specCode: `${SPEC}\n${line}` };
-    expect(() => validateGeneratedSuite(suite, ticket)).toThrow(GenerationError);
-  });
-
-  it('allows test.skip, which the result classifier reports as INCONCLUSIVE', () => {
-    const suite = { ...validSuite, specCode: `${SPEC}\ntest.skip('[AC-1] skipped', async () => {});` };
-    expect(validateGeneratedSuite(suite, ticket).specCode).toContain('test.skip');
-  });
-
-  it('accepts the import with double quotes and no semicolon', () => {
-    const suite = { ...validSuite, specCode: SPEC.replace("import { test, expect } from './qa-fixtures';", 'import { test, expect } from "./qa-fixtures"') };
-    expect(validateGeneratedSuite(suite, ticket).specCode).toContain('qa-fixtures');
-  });
-});
+const domainPlan: TestPlan = {
+  tests: [
+    {
+      criterionId: 'AC-1',
+      title: '[AC-1] Badge shown',
+      mutating: false,
+      steps: [
+        { action: 'goto', path: '/sale' },
+        { action: 'expectVisible', target: { text: 'Sale', exact: true } },
+      ],
+    },
+  ],
+  uncoverable: [{ criterionId: 'AC-2', reason: 'Placing an order mutates data in read-only mode' }],
+};
 
 const generationInput: GenerationInput = {
   ticket,
@@ -138,19 +71,19 @@ function fakeClient(message: { stop_reason: string | null; content: unknown[] })
 }
 
 describe('ClaudeTestGenerator', () => {
-  it('sends the documented request shape and returns the validated suite', async () => {
+  it('sends the documented request shape and returns the validated plan', async () => {
     const { client, calls } = fakeClient({
       stop_reason: 'end_turn',
-      content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: JSON.stringify(validSuite) }],
+      content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: JSON.stringify(wirePlan) }],
     });
     const generator = new ClaudeTestGenerator({ client, model: 'claude-opus-5-5' });
 
-    await expect(generator.generate(generationInput)).resolves.toEqual(validSuite);
+    await expect(generator.generate(generationInput)).resolves.toEqual(domainPlan);
 
     const params = calls[0] ?? {};
     expect(params.model).toBe('claude-opus-5-5');
     expect(params.max_tokens).toBe(64_000);
-    expect(params.output_config).toMatchObject({ effort: 'high', format: { type: 'json_schema' } });
+    expect(params.output_config).toEqual({ effort: 'high', format: { type: 'json_schema', schema: PLAN_OUTPUT_SCHEMA } });
     expect(params.fallbacks).toBe('default');
     expect(params.betas).toEqual(['server-side-fallback-2026-07-01']);
     for (const forbidden of ['thinking', 'temperature', 'tool_choice', 'top_p', 'top_k']) {
@@ -159,6 +92,23 @@ describe('ClaudeTestGenerator', () => {
     const messages = params.messages as { role: string }[];
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe('user');
+  });
+
+  it('rejects an invalid plan with a GenerationError that lists the violations', async () => {
+    const invalid = { ...wirePlan, tests: [{ ...wirePlan.tests[0], steps: [{ action: 'goto', path: 'https://evil.example.com/' }] }] };
+    const { client } = fakeClient({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(invalid) }] });
+    const generation = new ClaudeTestGenerator({ client, model: 'm' }).generate(generationInput);
+    await expect(generation).rejects.toBeInstanceOf(GenerationError);
+    await expect(new ClaudeTestGenerator({ client, model: 'm' }).generate(generationInput)).rejects.toThrow(/Invalid test plan: .*path/);
+    await expect(new ClaudeTestGenerator({ client, model: 'm' }).generate(generationInput)).rejects.toMatchObject({ status: undefined });
+  });
+
+  it('moves a mutating test to uncoverable under the read-only policy', async () => {
+    const mutating = { ...wirePlan, tests: [{ ...wirePlan.tests[0], mutating: true }] };
+    const { client } = fakeClient({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(mutating) }] });
+    const plan = await new ClaudeTestGenerator({ client, model: 'm' }).generate(generationInput);
+    expect(plan.tests).toEqual([]);
+    expect(plan.uncoverable.map((entry) => entry.criterionId)).toEqual(['AC-2', 'AC-1']);
   });
 
   it.each(['refusal', 'max_tokens'])('throws GenerationError on stop_reason %s', async (stopReason) => {

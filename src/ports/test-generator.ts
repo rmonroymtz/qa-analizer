@@ -1,4 +1,5 @@
 import type { EnvironmentPolicy } from '../domain/environment.js';
+import type { TestPlan } from '../domain/test-plan.js';
 import type { Ticket } from '../domain/ticket.js';
 import type { PageSnapshot } from './page-inspector.js';
 
@@ -10,12 +11,7 @@ export interface GenerationInput {
   authenticated: boolean;
 }
 
-export interface GeneratedSuite {
-  specCode: string;
-  criteria: { criterionId: string; testTitle: string }[];
-  uncoverable: { criterionId: string; reason: string }[];
-}
-
 export interface TestGenerator {
-  generate(input: GenerationInput): Promise<GeneratedSuite>;
+  /** Returns a validated declarative plan; nothing in it is executable code. */
+  generate(input: GenerationInput): Promise<TestPlan>;
 }

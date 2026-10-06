@@ -12,12 +12,13 @@ import { JiraTicketCommenter } from '../adapters/jira/jira-ticket-commenter.js';
 import { JiraTicketRepository } from '../adapters/jira/jira-ticket-repository.js';
 import { performFormLogin } from '../adapters/playwright/form-login.js';
 import { PlaywrightPageInspector } from '../adapters/playwright/page-inspector.js';
-import { PlaywrightTestRunner } from '../adapters/playwright/playwright-test-runner.js';
+import { PlaywrightPlanRunner } from '../adapters/playwright/plan-runner.js';
+import { renderPlanAsSpec } from '../adapters/playwright/plan-spec-renderer.js';
 import { exitCodeForPolicy } from '../application/exit-code.js';
 import { VerifyTicketUseCase, type VerificationReport } from '../application/verify-ticket.js';
 import { ConfigError, loadConfig, type AppConfig } from '../config/load-config.js';
 
-export const HELP = `qa-analyzer — verify a deployed Jira ticket with AI-generated Playwright tests
+export const HELP = `qa-analyzer — verify a deployed Jira ticket with an AI-generated test plan run in Playwright
 
 Usage:
   qa-analyzer verify [options]
@@ -81,7 +82,8 @@ async function verify(config: AppConfig, io: CliIo): Promise<number> {
       client: new Anthropic(config.anthropic.apiKey ? { apiKey: config.anthropic.apiKey } : {}),
       model: config.anthropic.model,
     }),
-    runner: new PlaywrightTestRunner(),
+    renderPlanSpec: renderPlanAsSpec,
+    runner: new PlaywrightPlanRunner(),
     login:
       auth.mode === 'form' && authDir
         ? async () => {
