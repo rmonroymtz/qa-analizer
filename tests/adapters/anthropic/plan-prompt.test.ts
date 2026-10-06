@@ -62,6 +62,9 @@ describe('buildPlanPrompt', () => {
     expect(system).toMatch(/untrusted/i);
     expect(system).toMatch(/relative path/i);
     expect(system).not.toContain('qa-fixtures');
+    expect(system).toContain('Every test needs at least one positive assertion');
+    expect(system).toMatch(/expectHidden, expectCount with a count of 0 and expectUrl never count as positive/);
+    expect(system).toMatch(/never "\/" or wildcards alone/);
   });
 
   it('includes the read-only rules only for read-only policy', () => {

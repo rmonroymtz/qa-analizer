@@ -5,6 +5,7 @@ import {
   MAX_STEPS_PER_TEST,
   MAX_STRING_LENGTH,
   MUTATING_SKIPPED_REASON,
+  NO_POSITIVE_ASSERTION_REASON,
   PlanValidationError,
   validateTestPlan,
   type TestPlan,
@@ -186,8 +187,52 @@ describe('validateTestPlan', () => {
   });
 
   it('strips fields that do not belong to the action', () => {
-    const result = validateTestPlan(withSteps([{ action: 'expectUrl', pathPattern: '/sale', value: 'ignored' }]), ticket, full);
+    const result = validateTestPlan(withSteps([{ action: 'expectUrl', pathPattern: '/sale', value: 'ignored' }, { action: 'expectTitle', text: 'Sale', match: 'contains' }]), ticket, full);
     expect(result.tests[0]?.steps[0]).toEqual({ action: 'expectUrl', pathPattern: '/sale' });
+  });
+
+  describe('positive assertions', () => {
+    it.each([
+      ['expectVisible', { action: 'expectVisible', target: { role: 'heading', name: 'Sale' } }],
+      ['expectText', { action: 'expectText', target: { role: 'status' }, text: 'Saved', match: 'equals' }],
+      ['expectValue', { action: 'expectValue', target: { label: 'Search' }, value: '' }],
+      ['expectCount with a count of at least 1', { action: 'expectCount', target: { role: 'listitem' }, count: 1 }],
+      ['expectTitle', { action: 'expectTitle', text: 'Sale', match: 'contains' }],
+    ])('keeps a test whose positive assertion is %s', (_label, step) => {
+      const result = validateTestPlan(withSteps([{ action: 'goto', path: '/' }, { action: 'expectHidden', target: { text: 'Loading' } }, step]), ticket, full);
+      expect(result.tests.map((test) => test.criterionId)).toEqual(['AC-1']);
+    });
+
+    it.each([
+      ['only expectHidden', [{ action: 'expectHidden', target: { text: 'Old banner' } }]],
+      ['only expectCount of 0', [{ action: 'expectCount', target: { role: 'dialog' }, count: 0 }]],
+      ['only expectUrl', [{ action: 'expectUrl', pathPattern: '/checkout' }]],
+      ['negative assertions combined', [{ action: 'expectHidden', target: { text: 'x' } }, { action: 'expectCount', target: { testId: 'y' }, count: 0 }, { action: 'expectUrl', pathPattern: '/a' }]],
+    ])('moves a test with %s to uncoverable, in every mode', (_label, steps) => {
+      for (const policy of [full, readOnly]) {
+        const result = validateTestPlan(withSteps([{ action: 'goto', path: '/' }, ...steps]), ticket, policy);
+        expect(result.tests).toEqual([]);
+        expect(result.uncoverable).toEqual([
+          { criterionId: 'AC-2', reason: 'requires a mutating action' },
+          { criterionId: 'AC-1', reason: NO_POSITIVE_ASSERTION_REASON },
+        ]);
+      }
+    });
+
+    it('explains the rule in the uncoverable reason', () => {
+      expect(NO_POSITIVE_ASSERTION_REASON).toBe(
+        'no positive assertion: the test needs an expectVisible, expectText, expectValue, expectCount (count of at least 1) or expectTitle step, so it cannot pass when its targets do not exist',
+      );
+    });
+  });
+
+  it.each(['/', ' / ', '/*', '/**', '*', '//*/'])('rejects a trivial expectUrl pathPattern %j', (pathPattern) => {
+    const violations = violationsOf(withSteps([{ action: 'expectUrl', pathPattern }, { action: 'expectTitle', text: 'x', match: 'contains' }]));
+    expect(violations.join('\n')).toMatch(/pathPattern: must name a specific path/);
+  });
+
+  it('rejects an empty expectUrl pathPattern', () => {
+    expect(violationsOf(withSteps([{ action: 'expectUrl', pathPattern: '' }, { action: 'expectTitle', text: 'x', match: 'contains' }]))).not.toEqual([]);
   });
 
   it('collects every violation in one error', () => {

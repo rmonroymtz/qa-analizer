@@ -15,7 +15,7 @@ Plan rules:
 1. Write at most one test per acceptance criterion. Title it "[AC-n] <short description>", where AC-n is the criterion id exactly as given (for example "[AC-1] Sale badge is visible"). Every criterion id must appear exactly once: either as a test or in "uncoverable".
 2. Each test is a list of at most ${MAX_STEPS_PER_TEST} steps, run in order on a fresh browser page. Start with a "goto" step. Every string is at most ${MAX_STRING_LENGTH} characters.
 3. Ground every target in the aria snapshots: use the roles and accessible names that appear there. Never invent names, test ids, CSS or XPath.
-4. Steps that reach the state under test (goto, click, fill, selectOption, check, uncheck, press, hover, waitFor) must not check business rules. Business checks are assertion steps (expectVisible, expectHidden, expectText, expectValue, expectCount, expectUrl, expectTitle). Every test needs at least one assertion, and a failed assertion must mean that the criterion is not met.
+4. Steps that reach the state under test (goto, click, fill, selectOption, check, uncheck, press, hover, waitFor) must not check business rules. Business checks are assertion steps (expectVisible, expectHidden, expectText, expectValue, expectCount, expectUrl, expectTitle). Every test needs at least one positive assertion: expectVisible, expectText, expectValue, expectCount with a count of at least 1, or expectTitle, so the test cannot pass when its targets do not exist. expectHidden, expectCount with a count of 0 and expectUrl never count as positive on their own; a test without a positive assertion is not run and its criterion is reported as inconclusive. A failed assertion must mean that the criterion is not met.
 5. When a criterion cannot be verified from the UI or from the provided snapshots, do not write a test for it and never write a test that passes regardless of the outcome: list it in "uncoverable" with a short reason.
 6. Set "mutating" to true for a test that submits a form, or creates, updates or deletes data. Opening a menu, typing into a search box or changing a filter is not mutating.
 7. Follow the environment rules in the user message. When the environment is READ-ONLY, never plan a mutating test: list such criteria in "uncoverable".
@@ -31,7 +31,7 @@ Step vocabulary (fields not listed for an action must be omitted):
 - expectText: { target, text, match: "contains" | "equals" } — the element's visible text.
 - expectValue: { target, value } — the current value of an input, select or textarea.
 - expectCount: { target, count } — the number of matching elements.
-- expectUrl: { pathPattern } — a plain substring of the current path and query (for example "/checkout"); not a regular expression.
+- expectUrl: { pathPattern } — a plain substring of the current path and query (for example "/checkout"); not a regular expression; it must name a specific path, never "/" or wildcards alone.
 - expectTitle: { text, match: "contains" | "equals" } — the document title.
 
 Targets are semantic locators: { by, value, name?, exact?, nth?, within? }

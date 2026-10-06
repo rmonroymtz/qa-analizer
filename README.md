@@ -42,6 +42,7 @@ Expected result: a summary on stdout, and `qa-report/report.json` plus `qa-repor
 | Action or navigation error, step timeout, test over its 90 s budget | INCONCLUSIVE, with the step number and action |
 | Assertion failed after the read-only guard blocked a request to the target host | INCONCLUSIVE (the block may be the cause) |
 | Mutating test in read-only mode | INCONCLUSIVE, "mutating test skipped in read-only mode" (never executed) |
+| Test without a positive assertion (only `expectHidden`, `expectCount` of 0 or `expectUrl`) | INCONCLUSIVE, "no positive assertion: ..." (never executed) |
 | Criterion not verifiable from the UI (Claude says so) | INCONCLUSIVE, with the reason |
 
 Blocked requests are listed in the criterion reason. The classification of a missing assertion target is a pending product decision; it lives in one place (`src/adapters/playwright/step-classification.ts`).
@@ -66,9 +67,9 @@ Claude never writes code, and qa-analyzer never executes model-written code. A p
 |------|---------|
 | Navigation | `goto { path }`: a path relative to `TARGET_BASE_URL` (starts with one `/`; no scheme, host, backslash or `..`) |
 | Interaction | `click`, `check`, `uncheck`, `hover`, `fill { value }`, `selectOption { value }`, `press { key }`, `waitFor { state }` |
-| Assertion | `expectVisible`, `expectHidden`, `expectText { text, match }`, `expectValue { value }`, `expectCount { count }`, `expectUrl { pathPattern }` (plain substring), `expectTitle { text, match }` |
+| Assertion | `expectVisible`, `expectHidden`, `expectText { text, match }`, `expectValue { value }`, `expectCount { count }`, `expectUrl { pathPattern }` (plain substring; `/` or wildcards alone are rejected), `expectTitle { text, match }` |
 
-Targets are semantic only: `role` (+ accessible `name`), `label`, `text`, `placeholder` or `testId`, with an optional `nth` and one optional parent (`within`). There are no CSS, XPath or raw selectors. Every test needs at least one assertion, and Claude marks tests that change data as `mutating`.
+Targets are semantic only: `role` (+ accessible `name`), `label`, `text`, `placeholder` or `testId`, with an optional `nth` and one optional parent (`within`). There are no CSS, XPath or raw selectors. Every test needs at least one **positive** assertion: `expectVisible`, `expectText`, `expectValue`, `expectCount` with a count of at least 1, or `expectTitle`. `expectHidden`, `expectCount` of 0 and `expectUrl` also pass when a guessed target matches nothing, so a test made only of them never runs: the validator moves it to the uncoverable list and its criterion is INCONCLUSIVE, while the other tests of the plan still run. Claude marks tests that change data as `mutating`.
 
 Each test runs in a fresh browser context (service workers blocked, downloads refused). In production the read-only guard is installed on that context by qa-analyzer, before any page exists, and nothing in the plan can remove it. Step timeouts: 10 s for actions and assertions, 30 s for navigation, 90 s per test.
 

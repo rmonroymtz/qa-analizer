@@ -88,6 +88,31 @@ export const MAX_STRING_LENGTH = 500;
 const MAX_KEY_LENGTH = 50;
 const MAX_COUNT = 10_000;
 export const MUTATING_SKIPPED_REASON = 'mutating test skipped in read-only mode';
+export const NO_POSITIVE_ASSERTION_REASON =
+  'no positive assertion: the test needs an expectVisible, expectText, expectValue, expectCount (count of at least 1) or expectTitle step, so it cannot pass when its targets do not exist';
+
+/**
+ * An assertion that can only pass when something real is on the page: a target
+ * that must resolve to an element, or the document title. `expectHidden`,
+ * `expectCount` of 0 and `expectUrl` also pass when a hallucinated target matches
+ * nothing, so they never ground a test on their own.
+ */
+export function isPositiveAssertion(step: Step): boolean {
+  switch (step.action) {
+    case 'expectVisible':
+    case 'expectText':
+    case 'expectValue':
+    case 'expectTitle':
+      return true;
+    case 'expectCount':
+      return step.count >= 1;
+    default:
+      return false;
+  }
+}
+
+/** A path pattern made only of slashes, wildcards and whitespace matches every URL. */
+const TRIVIAL_PATH_PATTERN = /^[\s/*]*$/;
 
 /** The plan does not satisfy the contract; every violation is listed. */
 export class PlanValidationError extends Error {
@@ -238,8 +263,13 @@ function checkStep(raw: unknown, where: string, c: Checker): Step | undefined {
       return all({ action, target: target(), text: c.string(raw.text, `${where}.text`), match: c.oneOf(raw.match, ['contains', 'equals'] as const, `${where}.match`) });
     case 'expectCount':
       return all({ action, target: target(), count: c.nonNegativeInteger(raw.count, `${where}.count`) });
-    case 'expectUrl':
-      return all({ action, pathPattern: c.string(raw.pathPattern, `${where}.pathPattern`) });
+    case 'expectUrl': {
+      const pathPattern = c.string(raw.pathPattern, `${where}.pathPattern`);
+      if (pathPattern !== undefined && TRIVIAL_PATH_PATTERN.test(pathPattern)) {
+        return c.fail(`${where}.pathPattern`, 'must name a specific path; "/" or wildcards alone match every page');
+      }
+      return all({ action, pathPattern });
+    }
     case 'expectTitle':
       return all({ action, text: c.string(raw.text, `${where}.text`), match: c.oneOf(raw.match, ['contains', 'equals'] as const, `${where}.match`) });
   }
@@ -275,7 +305,11 @@ function checkUncoverable(raw: unknown, where: string, c: Checker): UncoverableC
  * - coverage: every acceptance criterion exactly once across `tests` and
  *   `uncoverable` (so at most one test per criterion), and no unknown ids;
  * - read-only policy: a test marked `mutating` is moved to `uncoverable`, so it is
- *   never executed and its criterion ends INCONCLUSIVE.
+ *   never executed and its criterion ends INCONCLUSIVE;
+ * - grounding, in every mode: a test without a positive assertion (see
+ *   {@link isPositiveAssertion}) is moved to `uncoverable` too. Only that test's
+ *   criterion becomes INCONCLUSIVE; rejecting the whole plan would discard every
+ *   other valid test of the run.
  * Throws a {@link PlanValidationError} listing every violation.
  */
 export function validateTestPlan(raw: unknown, ticket: Pick<Ticket, 'acceptanceCriteria'>, policy: Pick<EnvironmentPolicy, 'mode'>): TestPlan {
@@ -301,14 +335,18 @@ export function validateTestPlan(raw: unknown, ticket: Pick<Ticket, 'acceptanceC
   }
   if (c.violations.length > 0 || tests === undefined || uncoverable === undefined) throw new PlanValidationError(c.violations);
 
+  const skipReason = (test: PlannedTest): string | undefined => {
+    if (policy.mode === 'read-only' && test.mutating) return MUTATING_SKIPPED_REASON;
+    if (!test.steps.some(isPositiveAssertion)) return NO_POSITIVE_ASSERTION_REASON;
+    return undefined;
+  };
   const validTests = tests as PlannedTest[];
-  const validUncoverable = uncoverable as UncoverableCriterion[];
-  if (policy.mode !== 'read-only') return { tests: validTests, uncoverable: validUncoverable };
+  const skipped = validTests.flatMap((test) => {
+    const reason = skipReason(test);
+    return reason === undefined ? [] : [{ criterionId: test.criterionId, reason }];
+  });
   return {
-    tests: validTests.filter((test) => !test.mutating),
-    uncoverable: [
-      ...validUncoverable,
-      ...validTests.filter((test) => test.mutating).map((test) => ({ criterionId: test.criterionId, reason: MUTATING_SKIPPED_REASON })),
-    ],
+    tests: validTests.filter((test) => skipReason(test) === undefined),
+    uncoverable: [...(uncoverable as UncoverableCriterion[]), ...skipped],
   };
 }
