@@ -1,4 +1,5 @@
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type LaunchOptions, type Locator as PwLocator, type Page } from '@playwright/test';
+import { joinTargetUrl, offTargetOrigin } from '../../domain/target-url.js';
 import type { Locator, ParentTarget, Step, Target } from '../../domain/test-plan.js';
 import type { PlanDriver, PlanDriverOptions, PlanSession, StepOutcome } from './plan-runner.js';
 import { installReadOnlyGuard, type BlockedRequest, type RoutableTarget } from './read-only-guard.js';
@@ -169,11 +170,16 @@ async function act(step: Step, page: Page, timeouts: StepTimeouts): Promise<void
   }
 }
 
-/** Executes one plan step on a page. Never throws: every failure is returned as data. */
-export async function executeStep(page: Page, step: Step, timeouts: StepTimeouts = DEFAULT_STEP_TIMEOUTS): Promise<StepOutcome> {
+export interface ExecuteStepOptions {
+  /** `TARGET_BASE_URL`: `goto` paths keep its path prefix, and the page must stay on its origin. */
+  baseUrl: string;
+  timeouts?: StepTimeouts;
+}
+
+async function runStepOn(page: Page, step: Step, baseUrl: string, timeouts: StepTimeouts): Promise<StepOutcome> {
   if (step.action === 'goto') {
     try {
-      await page.goto(step.path, { timeout: timeouts.navigationMs, waitUntil: 'domcontentloaded' });
+      await page.goto(joinTargetUrl(baseUrl, step.path), { timeout: timeouts.navigationMs, waitUntil: 'domcontentloaded' });
       return { ok: true };
     } catch (error) {
       return { ok: false, kind: 'navigation', message: firstLine(error) };
@@ -199,11 +205,24 @@ export async function executeStep(page: Page, step: Step, timeouts: StepTimeouts
   return { ok: false, ...detail };
 }
 
+/**
+ * Executes one plan step on a page. Never throws: every failure is returned as
+ * data. Whatever the step's own outcome, if the page is no longer on the target
+ * origin afterwards (a link, a redirect or a script took it elsewhere), the step
+ * fails with the kind `off-origin`, so nothing is evaluated on a foreign page.
+ */
+export async function executeStep(page: Page, step: Step, options: ExecuteStepOptions): Promise<StepOutcome> {
+  const outcome = await runStepOn(page, step, options.baseUrl, options.timeouts ?? DEFAULT_STEP_TIMEOUTS);
+  const foreign = offTargetOrigin(page.url(), options.baseUrl);
+  return foreign === undefined ? outcome : { ok: false, kind: 'off-origin', message: foreign };
+}
+
 export type BrowserLauncher = (options: LaunchOptions) => Promise<Browser>;
 
 /**
- * Launches one Chromium and opens one hardened context per session: base URL,
- * the optional storage state, service workers blocked (they could bypass the
+ * Launches one Chromium and opens one hardened context per session: base URL
+ * (plan paths are joined to it with {@link joinTargetUrl}, so its path prefix is
+ * kept), the optional storage state, service workers blocked (they could bypass the
  * route guard), downloads refused, and in read-only mode the guard installed on
  * the context before any page is created.
  */
@@ -240,8 +259,10 @@ export async function createPlaywrightPlanDriver(
         throw error;
       }
       return {
-        runStep: (step) => executeStep(page, step, timeouts),
+        runStep: (step) => executeStep(page, step, { baseUrl: options.baseUrl, timeouts }),
         screenshot: async (path) => {
+          const foreign = offTargetOrigin(page.url(), options.baseUrl);
+          if (foreign !== undefined) throw new Error(`refusing to capture a page outside the target site (${foreign})`);
           await page.screenshot({ path, fullPage: true, timeout: timeouts.actionMs });
         },
         blockedRequests: () => blocked,

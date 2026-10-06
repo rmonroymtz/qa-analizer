@@ -62,11 +62,11 @@ describe('buildVerificationCommentAdf', () => {
   });
 
   it('names attached files by basename and mentions failed uploads', () => {
-    const doc = buildVerificationCommentAdf(comment, { failedAttachments: ['/tmp/qa/trace.zip'] });
+    const doc = buildVerificationCommentAdf(comment, { failedAttachments: ['/tmp/qa/screenshots/AC-1.png'] });
     const textOut = adfToText(doc);
     expect(textOut).toContain('ac-2.png');
     expect(textOut).not.toContain('/tmp/qa/');
-    expect(textOut).toContain('trace.zip');
+    expect(textOut).toContain('AC-1.png');
     expect(textOut.toLowerCase()).toContain('could not be attached');
   });
 

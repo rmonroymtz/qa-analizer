@@ -8,9 +8,11 @@ import type { BlockedRequest } from './read-only-guard.js';
  * - `error`: an assertion could not be evaluated (closed page, detached element);
  * - `action`: an interaction failed (not found, timeout, strict mode, detached);
  * - `navigation`: `goto` failed;
+ * - `off-origin`: after this step the page was no longer on the target site
+ *   (the message is the foreign origin);
  * - `budget`: the whole test ran out of time during this step.
  */
-export type StepFailureKind = 'assertion' | 'error' | 'action' | 'navigation' | 'budget';
+export type StepFailureKind = 'assertion' | 'error' | 'action' | 'navigation' | 'off-origin' | 'budget';
 
 export interface StepFailureDetail {
   kind: StepFailureKind;
@@ -56,30 +58,16 @@ function blockedSuffix(blocked: readonly BlockedRequest[]): string {
   return `; blocked requests: ${listed.join(', ')}${more}`;
 }
 
-function onHost(url: string, host: string | undefined): boolean {
-  try {
-    return host !== undefined && new URL(url).host === host;
-  } catch {
-    return false;
-  }
-}
-
-function hostOf(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).host;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Classifies the first failing step of a test. Only an assertion that was
  * evaluated against a resolved target (or against the URL or title) is FAILED;
  * everything that kept the test from reaching or identifying its target is
- * INCONCLUSIVE. A failed assertion after the read-only guard blocked a request to
- * the target host is INCONCLUSIVE too, because the block may have caused it.
+ * INCONCLUSIVE. A failed assertion after the read-only guard blocked any request
+ * (to the target or to another host not in `QA_READONLY_ALLOW_HOSTS`, such as
+ * the site's API on a sibling domain) is INCONCLUSIVE too, because the block may
+ * have caused it.
  */
-export function classifyStepFailure(failure: StepFailure, blocked: readonly BlockedRequest[], baseUrl: string): StepClassification {
+export function classifyStepFailure(failure: StepFailure, blocked: readonly BlockedRequest[]): StepClassification {
   const label = stepLabel(failure);
   const suffix = blockedSuffix(blocked);
   switch (failure.kind) {
@@ -88,6 +76,8 @@ export function classifyStepFailure(failure: StepFailure, blocked: readonly Bloc
       return { status: 'INCONCLUSIVE', reason: `could not complete ${label}: ${failure.message}${suffix}` };
     case 'navigation':
       return { status: 'INCONCLUSIVE', reason: `navigation failed at ${label}: ${failure.message}${suffix}` };
+    case 'off-origin':
+      return { status: 'INCONCLUSIVE', reason: `navigation left the target site (${failure.message}) at ${label}${suffix}` };
     case 'budget':
       return { status: 'INCONCLUSIVE', reason: `test exceeded its time budget at ${label}: ${failure.message}${suffix}` };
     case 'assertion':
@@ -100,9 +90,8 @@ export function classifyStepFailure(failure: StepFailure, blocked: readonly Bloc
   if (failure.expected !== undefined) evidence.expected = failure.expected;
   if (failure.actual !== undefined) evidence.actual = failure.actual;
   const details = failure.expected !== undefined || failure.actual !== undefined ? `expected ${failure.expected ?? '?'}, actual ${failure.actual ?? '?'}` : failure.message;
-  const host = hostOf(baseUrl);
-  if (blocked.some((request) => onHost(request.url, host))) {
-    return { status: 'INCONCLUSIVE', reason: `${label} failed after the read-only guard blocked a request to the target: ${details}${suffix}`, evidence };
+  if (blocked.length > 0) {
+    return { status: 'INCONCLUSIVE', reason: `${label} failed after the read-only guard blocked a request: ${details}${suffix}`, evidence };
   }
   return { status: 'FAILED', reason: `${label} failed: ${details}${suffix}`, evidence };
 }

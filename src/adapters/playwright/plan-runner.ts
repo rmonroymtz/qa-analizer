@@ -12,8 +12,12 @@ export type StepOutcome = { ok: true } | ({ ok: false } & StepFailureDetail);
 
 /** One isolated browser context and page for one test. */
 export interface PlanSession {
-  /** Executes one step; never throws, failures are returned. */
+  /**
+   * Executes one step; never throws, failures are returned. A step after which
+   * the page is no longer on the target origin fails with the kind `off-origin`.
+   */
   runStep(step: Step): Promise<StepOutcome>;
+  /** Captures the page; must refuse (throw) when the page is not on the target origin. */
   screenshot(path: string): Promise<void>;
   /** Requests blocked by the read-only guard in this session so far. */
   blockedRequests(): readonly BlockedRequest[];
@@ -142,12 +146,13 @@ export class PlaywrightPlanRunner implements TestRunner {
         return classifyStepFailure(
           { kind: 'budget', message: `no result after ${budgetMs}ms`, stepIndex: current, action: step.action },
           session.blockedRequests(),
-          ctx.baseUrl,
         );
       }
       if (outcome === undefined) return { status: 'PASSED', reason: 'test passed' };
 
-      const classified = classifyStepFailure(outcome, session.blockedRequests(), ctx.baseUrl);
+      const classified = classifyStepFailure(outcome, session.blockedRequests());
+      // Never capture a foreign page: the screenshot could end up attached to the Jira ticket.
+      if (outcome.kind === 'off-origin') return classified;
       const screenshotPath = join(resolve(ctx.outputDir), 'screenshots', screenshotName(test.criterionId));
       try {
         await mkdir(join(resolve(ctx.outputDir), 'screenshots'), { recursive: true });

@@ -178,6 +178,28 @@ describe('PlaywrightPlanRunner', () => {
     expect(driver.events).toContain('close-session');
   });
 
+  it('stops a test that left the target site as INCONCLUSIVE and takes no screenshot of the foreign page', async () => {
+    const driver = fakeDriver((step) => (step.action === 'click' ? { ok: false, kind: 'off-origin', message: 'https://evil.example.net' } : pass));
+    const plan: TestPlan = {
+      tests: [test('AC-1', [{ action: 'goto', path: '/' }, { action: 'click', target: { role: 'link', name: 'Partner' } }, visible('After')])],
+      uncoverable: [{ criterionId: 'AC-2', reason: 'x' }, { criterionId: 'AC-3', reason: 'y' }],
+    };
+    const [result] = await new PlaywrightPlanRunner({ driverFactory: driver.factory }).run(plan, ctx(full));
+    expect(result).toEqual({ criterionId: 'AC-1', status: 'INCONCLUSIVE', reason: 'navigation left the target site (https://evil.example.net) at step 2 (click)' });
+    expect(driver.events).not.toContain('step:expectVisible');
+    expect(driver.events.some((event) => event.startsWith('screenshot:'))).toBe(false);
+  });
+
+  it('downgrades a failed assertion to INCONCLUSIVE when the guard blocked a request to another host', async () => {
+    const driver = fakeDriver(() => fail, [{ method: 'POST', url: 'https://api.example.net/cart' }]);
+    const plan: TestPlan = { tests: [test('AC-1', [visible('Cart')])], uncoverable: [{ criterionId: 'AC-2', reason: 'x' }, { criterionId: 'AC-3', reason: 'y' }] };
+    const [result] = await new PlaywrightPlanRunner({ driverFactory: driver.factory }).run(plan, ctx(readOnly));
+    expect(result).toMatchObject({
+      status: 'INCONCLUSIVE',
+      reason: 'step 1 (expectVisible) failed after the read-only guard blocked a request: expected visible, actual hidden; blocked requests: POST https://api.example.net/cart',
+    });
+  });
+
   it('marks every test INCONCLUSIVE when the browser cannot start', async () => {
     const factory = async (): Promise<PlanDriver> => {
       throw new Error('Executable does not exist');

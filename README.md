@@ -40,7 +40,8 @@ Expected result: a summary on stdout, and `qa-report/report.json` plus `qa-repor
 | Assertion target matches no element | INCONCLUSIVE, "expected element not found: the feature may be missing or the UI changed — needs human review" |
 | Assertion target matches several elements without `nth` | INCONCLUSIVE |
 | Action or navigation error, step timeout, test over its 90 s budget | INCONCLUSIVE, with the step number and action |
-| Assertion failed after the read-only guard blocked a request to the target host | INCONCLUSIVE (the block may be the cause) |
+| Assertion failed after the read-only guard blocked any request during the test (to the target or to any host not in `QA_READONLY_ALLOW_HOSTS`) | INCONCLUSIVE (the block may be the cause) |
+| A step took the page off the target origin (link, redirect, script) | INCONCLUSIVE, "navigation left the target site (<origin>)"; the test stops and no screenshot is taken of the foreign page |
 | Mutating test in read-only mode | INCONCLUSIVE, "mutating test skipped in read-only mode" (never executed) |
 | Test without a positive assertion (only `expectHidden`, `expectCount` of 0 or `expectUrl`) | INCONCLUSIVE, "no positive assertion: ..." (never executed) |
 | Criterion not verifiable from the UI (Claude says so) | INCONCLUSIVE, with the reason |
@@ -65,13 +66,13 @@ Claude never writes code, and qa-analyzer never executes model-written code. A p
 
 | Kind | Actions |
 |------|---------|
-| Navigation | `goto { path }`: a path relative to `TARGET_BASE_URL` (starts with one `/`; no scheme, host, backslash or `..`) |
+| Navigation | `goto { path }`: a path relative to `TARGET_BASE_URL` (starts with one `/`; no scheme, host, backslash or `..`). The base URL's path prefix is kept: with `TARGET_BASE_URL=https://example.com/app/`, `/cart` opens `https://example.com/app/cart` |
 | Interaction | `click`, `check`, `uncheck`, `hover`, `fill { value }`, `selectOption { value }`, `press { key }`, `waitFor { state }` |
 | Assertion | `expectVisible`, `expectHidden`, `expectText { text, match }`, `expectValue { value }`, `expectCount { count }`, `expectUrl { pathPattern }` (plain substring; `/` or wildcards alone are rejected), `expectTitle { text, match }` |
 
 Targets are semantic only: `role` (+ accessible `name`), `label`, `text`, `placeholder` or `testId`, with an optional `nth` and one optional parent (`within`). There are no CSS, XPath or raw selectors. Every test needs at least one **positive** assertion: `expectVisible`, `expectText`, `expectValue`, `expectCount` with a count of at least 1, or `expectTitle`. `expectHidden`, `expectCount` of 0 and `expectUrl` also pass when a guessed target matches nothing, so a test made only of them never runs: the validator moves it to the uncoverable list and its criterion is INCONCLUSIVE, while the other tests of the plan still run. Claude marks tests that change data as `mutating`.
 
-Each test runs in a fresh browser context (service workers blocked, downloads refused). In production the read-only guard is installed on that context by qa-analyzer, before any page exists, and nothing in the plan can remove it. Step timeouts: 10 s for actions and assertions, 30 s for navigation, 90 s per test.
+Each test runs in a fresh browser context (service workers blocked, downloads refused). In production the read-only guard is installed on that context by qa-analyzer, before any page exists, and nothing in the plan can remove it. It also covers popups and new tabs, which open in the same context. After every step the page must still be on the origin of `TARGET_BASE_URL`; otherwise the test stops as INCONCLUSIVE. Step timeouts: 10 s for actions and assertions, 30 s for navigation, 90 s per test.
 
 ## CLI
 
@@ -113,7 +114,7 @@ Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on ne
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `TARGET_BASE_URL` | Yes | Base URL of the deployed environment |
+| `TARGET_BASE_URL` | Yes | Base URL of the deployed environment. It may include a path prefix (`https://example.com/app`); plan `goto` paths are joined to it |
 | `QA_ENV` | Yes, unless `--env` or `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | `staging` or `production` |
 | `JIRA_BASE_URL` | Yes | e.g. `https://acme.atlassian.net` |
 | `JIRA_EMAIL` | Yes | Jira account for the API token |
@@ -149,7 +150,7 @@ Secrets are only read from the environment, are never printed, and are scrubbed 
 - Claude is told to list criteria that need a mutation as uncoverable. A test it marks `mutating` is moved to uncoverable by the validator and is never executed.
 - Non-mutating interactions (opening a menu, typing in a search box) are allowed; the network guard is the authoritative enforcement.
 
-A blocked request is listed in the criterion reason. An assertion that fails after a request to the target host was blocked is INCONCLUSIVE, never NOT_RESOLVED.
+A blocked request is listed in the criterion reason. An assertion that fails after the guard blocked any request during that test, to the target host or to any other host not in `QA_READONLY_ALLOW_HOSTS` (for example the site's API on a sibling domain), is INCONCLUSIVE, never NOT_RESOLVED.
 
 ## Login setup
 
@@ -172,7 +173,7 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 | `qa-report/summary.md` | Human-readable summary |
 | `qa-report/plan.json` | The validated test plan that was executed |
 | `qa-report/generated/plan.spec.ts` | The plan rendered as a readable Playwright spec, **for human review only**; qa-analyzer never executes it |
-| `qa-report/screenshots/<criterion>.png` | Full-page screenshot of each failed or inconclusive test |
+| `qa-report/screenshots/<criterion>.png` | Full-page screenshot of each failed or inconclusive test (never of a page outside the target origin) |
 
 **No traces.** A Playwright trace records request headers and cookies, including the session from the login step, and `qa-report/**` is uploaded as a pipeline artifact, so no traces are recorded.
 
