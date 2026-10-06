@@ -39,13 +39,15 @@ describe('loadConfig', () => {
     expect(config.failOn).toBe('not-resolved');
     expect(config.outputDir).toBe('qa-report');
     expect(config.targetBaseUrl).toBe('https://staging.example.com');
+    // Secrets are non-enumerable, so they are asserted directly rather than through toEqual.
     expect(config.jira).toEqual({
       baseUrl: 'https://acme.atlassian.net',
       email: 'qa@example.com',
-      apiToken: SECRET_TOKEN,
       acField: undefined,
     });
-    expect(config.anthropic).toEqual({ apiKey: undefined, model: 'claude-opus-5-5' });
+    expect(config.jira.apiToken).toBe(SECRET_TOKEN);
+    expect(config.anthropic).toEqual({ model: 'claude-opus-5-5' });
+    expect(config.anthropic.apiKey).toBeUndefined();
     expect(config.auth).toEqual({ mode: 'none' });
     expect(config.readiness).toEqual({ url: undefined, timeoutMs: 300000 });
     expect(config.ticket).toBeUndefined();
@@ -147,13 +149,13 @@ describe('loadConfig', () => {
     expect(config.auth).toEqual({
       mode: 'form',
       user: 'user',
-      password: SECRET_PASSWORD,
       loginPath: '/login',
       userSelector: '#user',
       passwordSelector: '#pass',
       submitSelector: 'button[type=submit]',
       successUrlPattern: '/dashboard$',
     });
+    expect(config.auth.mode === 'form' ? config.auth.password : undefined).toBe(SECRET_PASSWORD);
   });
 
   it('parses readiness settings', () => {
@@ -169,7 +171,8 @@ describe('loadConfig', () => {
       ['verify'],
       baseEnv({ ANTHROPIC_API_KEY: SECRET_KEY, QA_MODEL: 'claude-other', JIRA_AC_FIELD: 'customfield_10050' }),
     );
-    expect(config.anthropic).toEqual({ apiKey: SECRET_KEY, model: 'claude-other' });
+    expect(config.anthropic).toEqual({ model: 'claude-other' });
+    expect(config.anthropic.apiKey).toBe(SECRET_KEY);
     expect(config.jira.acField).toBe('customfield_10050');
   });
 
@@ -266,5 +269,28 @@ describe('config redaction', () => {
       }
     }
     expect(config.jira.apiToken).toBe(SECRET_TOKEN);
+  });
+
+  it('keeps secrets out of the nested jira, auth and anthropic objects', () => {
+    const config = loadConfig(['verify'], env);
+    const nested = [config.jira, config.auth, config.anthropic];
+    const outputs = nested.flatMap((part) => [
+      JSON.stringify(part),
+      inspect(part, { depth: 10 }),
+      inspect(part, { depth: 10, showHidden: true }),
+      JSON.stringify({ ...part }),
+      inspect({ ...part }),
+      JSON.stringify(structuredClone(part)),
+      inspect(structuredClone(part)),
+    ]);
+    for (const output of outputs) {
+      for (const secret of [SECRET_TOKEN, SECRET_KEY, SECRET_PASSWORD]) {
+        expect(output).not.toContain(secret);
+      }
+    }
+    expect(config.jira.apiToken).toBe(SECRET_TOKEN);
+    expect(config.anthropic.apiKey).toBe(SECRET_KEY);
+    expect(config.auth.mode === 'form' ? config.auth.password : undefined).toBe(SECRET_PASSWORD);
+    expect(JSON.stringify(config.jira)).toContain('qa@example.com');
   });
 });

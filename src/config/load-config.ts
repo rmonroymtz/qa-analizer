@@ -4,9 +4,16 @@ import { policyFor, type Environment, type EnvironmentPolicy } from '../domain/e
 
 export type FailOnPolicy = 'not-resolved' | 'inconclusive' | 'never';
 
+/*
+ * Secrets (`JiraConfig.apiToken`, `AnthropicConfig.apiKey` and the form
+ * `password`) are non-enumerable on configs built by loadConfig: read them
+ * directly; spreading or cloning a part of the config drops them on purpose.
+ */
+
 export interface JiraConfig {
   baseUrl: string;
   email: string;
+  /** Secret: non-enumerable on a loaded config. */
   apiToken: string;
   acField: string | undefined;
 }
@@ -139,6 +146,22 @@ export function redactConfig(config: AppConfig): AppConfig {
     auth,
     readiness: { ...config.readiness },
   };
+}
+
+/**
+ * Turns `key` into a non-enumerable, read-only property, so JSON.stringify,
+ * util.inspect, object spread and structuredClone of `holder` all skip it,
+ * while `holder[key]` still reads it. A custom inspector also hides it from
+ * `util.inspect(..., { showHidden: true })`.
+ */
+function hideSecret<T extends object>(holder: T, key: keyof T & string): T {
+  const value = holder[key];
+  Object.defineProperty(holder, key, { value, enumerable: false, writable: false, configurable: false });
+  Object.defineProperty(holder, inspect.custom, {
+    value: () => ({ ...holder }),
+    enumerable: false,
+  });
+  return holder;
 }
 
 /** Makes JSON, string conversion and `util.inspect` of the config emit the redacted form. */
@@ -318,6 +341,13 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     ...splitList(env.QA_READONLY_ALLOW),
   ];
 
+  hideSecret(jira, 'apiToken');
+  if (auth.mode === 'form') hideSecret(auth, 'password');
+  const anthropic: AnthropicConfig = hideSecret(
+    { apiKey: nonEmpty(env.ANTHROPIC_API_KEY), model: nonEmpty(env.QA_MODEL) ?? DEFAULT_MODEL },
+    'apiKey',
+  );
+
   return protectSerialization({
     command: 'verify',
     ticket,
@@ -331,7 +361,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     outputDir: nonEmpty(flags.outputDir) ?? 'qa-report',
     targetBaseUrl: targetBaseUrl.replace(/\/+$/, ''),
     jira,
-    anthropic: { apiKey: nonEmpty(env.ANTHROPIC_API_KEY), model: nonEmpty(env.QA_MODEL) ?? DEFAULT_MODEL },
+    anthropic,
     git: {
       branch: nonEmpty(env.BITBUCKET_BRANCH),
       commit: nonEmpty(env.BITBUCKET_COMMIT),

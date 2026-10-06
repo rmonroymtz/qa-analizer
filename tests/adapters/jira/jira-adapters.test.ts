@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { JiraClient, JiraError } from '../../../src/adapters/jira/jira-client.js';
 import { JiraTicketCommenter } from '../../../src/adapters/jira/jira-ticket-commenter.js';
@@ -41,6 +42,15 @@ const doc = (...content: unknown[]) => ({ type: 'doc', version: 1, content });
 const paragraph = (value: string) => ({ type: 'paragraph', content: [{ type: 'text', text: value }] });
 
 describe('JiraClient', () => {
+  it('keeps the token and the basic auth value out of inspect and JSON output', () => {
+    const jira = client(fakeFetch(() => json({})).fetchFn);
+    const encoded = Buffer.from(`${EMAIL}:${TOKEN}`).toString('base64');
+    for (const output of [inspect(jira, { depth: 10, showHidden: true }), JSON.stringify(jira), JSON.stringify({ ...jira })]) {
+      expect(output).not.toContain(TOKEN);
+      expect(output).not.toContain(encoded);
+    }
+  });
+
   it('sends basic auth and JSON accept headers', async () => {
     const { calls, fetchFn } = fakeFetch(() => json({ ok: true }));
     await client(fetchFn).getJson('/rest/api/3/myself');

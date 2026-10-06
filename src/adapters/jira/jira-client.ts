@@ -26,16 +26,17 @@ const MAX_DETAIL_CHARS = 300;
 /** Thin Jira Cloud REST client with basic auth and credential-safe errors. */
 export class JiraClient {
   readonly baseUrl: string;
-  private readonly authorization: string;
-  private readonly secrets: string[];
-  private readonly fetchFn: typeof fetch;
+  // ECMAScript private fields: invisible to util.inspect, JSON.stringify and spreading.
+  readonly #authorization: string;
+  readonly #secrets: string[];
+  readonly #fetchFn: typeof fetch;
 
   constructor(options: JiraClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     const encoded = Buffer.from(`${options.email}:${options.apiToken}`).toString('base64');
-    this.authorization = `Basic ${encoded}`;
-    this.secrets = [encoded, options.apiToken, options.email].filter((secret) => secret.length > 0);
-    this.fetchFn = options.fetch ?? fetch;
+    this.#authorization = `Basic ${encoded}`;
+    this.#secrets = [encoded, options.apiToken, options.email].filter((secret) => secret.length > 0);
+    this.#fetchFn = options.fetch ?? fetch;
   }
 
   async getJson<T>(path: string): Promise<T> {
@@ -64,9 +65,9 @@ export class JiraClient {
     const details = { method, path: path.split('?')[0] ?? path };
     let response: Response;
     try {
-      response = await this.fetchFn(`${this.baseUrl}${path}`, {
+      response = await this.#fetchFn(`${this.baseUrl}${path}`, {
         method,
-        headers: { ...init.headers, Authorization: this.authorization },
+        headers: { ...init.headers, Authorization: this.#authorization },
         ...(init.body == null ? {} : { body: init.body }),
       });
     } catch (error) {
@@ -102,6 +103,6 @@ export class JiraClient {
   }
 
   private scrub(message: string): string {
-    return this.secrets.reduce((current, secret) => current.split(secret).join('***'), message);
+    return this.#secrets.reduce((current, secret) => current.split(secret).join('***'), message);
   }
 }
