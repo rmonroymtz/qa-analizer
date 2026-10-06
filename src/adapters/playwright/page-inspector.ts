@@ -37,12 +37,14 @@ export class PlaywrightPageInspector implements PageInspector {
     try {
       const contextOptions: BrowserContextOptions = { baseURL: this.options.baseUrl };
       if (this.options.storageStatePath) contextOptions.storageState = this.options.storageStatePath;
+      // Service workers could issue requests that bypass the read-only route guard.
+      if (this.options.policy.mode === 'read-only') contextOptions.serviceWorkers = 'block';
       const context = await browser.newContext(contextOptions);
       if (this.options.policy.mode === 'read-only') {
         blocked = await installReadOnlyGuard(context as unknown as RoutableTarget, {
           baseUrl: this.options.baseUrl,
           allowedMutations: this.options.policy.allowedMutations,
-        allowedHosts: this.options.policy.allowedHosts,
+          allowedHosts: this.options.policy.allowedHosts,
         });
       }
       const page = await context.newPage();

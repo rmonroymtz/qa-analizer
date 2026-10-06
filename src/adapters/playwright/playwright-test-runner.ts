@@ -38,6 +38,8 @@ const STDERR_TAIL_CHARS = 2_000;
 const SECRET_ENV = /TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE|CREDENTIAL|^JIRA_|^ANTHROPIC_|^TEST_USER$/i;
 /** Node-side HTTP clients bypass the browser route guard. */
 const DIRECT_HTTP = [/\brequest\s*\.\s*(?:post|put|patch|delete|fetch)\s*\(/, /(?<![.\w])fetch\s*\(/];
+/** Settings the read-only guard relies on; a spec must not override them. */
+const GUARD_OVERRIDES = [/\bserviceWorkers\b/, /\brouteWebSocket\b/, /\bunroute(?:All)?\b/];
 
 export function sanitizedChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !SECRET_ENV.test(name)));
@@ -83,6 +85,8 @@ export interface ConfigTemplateInput {
   outputDir: string;
   baseUrl: string;
   storageStatePath?: string | undefined;
+  /** Read-only mode: block service workers, which could bypass the route guard. */
+  readOnly?: boolean;
 }
 
 /** The Playwright config, with absolute paths so it works from any working directory. */
@@ -99,6 +103,7 @@ export function renderConfig(input: ConfigTemplateInput): string {
     use: {
       baseURL: input.baseUrl,
       ...(input.storageStatePath ? { storageState: input.storageStatePath } : {}),
+      ...(input.readOnly ? { serviceWorkers: 'block' } : {}),
       browserName: 'chromium',
       headless: true,
       trace: 'retain-on-failure',
@@ -145,6 +150,9 @@ export class PlaywrightTestRunner implements TestRunner {
     if (ctx.policy.mode === 'read-only' && DIRECT_HTTP.some((pattern) => pattern.test(suite.specCode))) {
       return inconclusiveAll(suite, ctx, 'generated spec uses a direct HTTP client, which is not allowed in read-only mode');
     }
+    if (ctx.policy.mode === 'read-only' && GUARD_OVERRIDES.some((pattern) => pattern.test(suite.specCode))) {
+      return inconclusiveAll(suite, ctx, 'generated spec overrides a read-only guard setting, which is not allowed in read-only mode');
+    }
     const outputDir = resolve(ctx.outputDir);
     const generatedDir = join(outputDir, 'generated');
     const resultsPath = join(outputDir, 'results.json');
@@ -166,7 +174,14 @@ export class PlaywrightTestRunner implements TestRunner {
     await writeFile(join(generatedDir, SPEC_FILE), suite.specCode);
     await writeFile(
       configPath,
-      renderConfig({ playwrightModuleUrl, testDir: generatedDir, outputDir, baseUrl: ctx.baseUrl, storageStatePath: ctx.storageStatePath }),
+      renderConfig({
+        playwrightModuleUrl,
+        testDir: generatedDir,
+        outputDir,
+        baseUrl: ctx.baseUrl,
+        storageStatePath: ctx.storageStatePath,
+        readOnly: guard !== undefined,
+      }),
     );
 
     const launch = this.options.launch ?? defaultLauncher;

@@ -98,7 +98,7 @@ A configuration error (missing or invalid variables) always exits 2 and prints e
 | `TEST_USER`, `TEST_PASSWORD` | With `form` (secured) | Test account |
 | `QA_LOGIN_PATH` | With `form` | Login page path, e.g. `/login` |
 | `QA_LOGIN_USER_SELECTOR`, `QA_LOGIN_PASSWORD_SELECTOR`, `QA_LOGIN_SUBMIT_SELECTOR` | With `form` | Selectors of the login form |
-| `QA_LOGIN_SUCCESS_URL` | No | Regex the URL must match after login |
+| `QA_LOGIN_SUCCESS_URL` | No | Regex the URL must match after login. Without it, the login succeeds only if the page leaves the login path or the password field disappears |
 | `QA_READONLY_ALLOW` | No | Path globs (or `^regex`) on the target host that may mutate in production |
 | `QA_READONLY_ALLOW_HOSTS` | No | Hostnames to which any mutation is allowed in production (e.g. analytics) |
 | `BITBUCKET_BRANCH`, `BITBUCKET_COMMIT`, `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | Set by Bitbucket | Key resolution, readiness and environment |
@@ -109,8 +109,10 @@ Secrets are only read from the environment, are never printed, and are scrubbed 
 
 `production` always runs read-only:
 
-- Every browser request with `POST`, `PUT`, `PATCH` or `DELETE` is aborted, to **any** host.
+- Only `GET`, `HEAD` and `OPTIONS` are treated as safe. Every browser request with any other method (`POST`, `PUT`, `PATCH`, `DELETE`, WebDAV or custom methods) is aborted, to **any** host.
 - Exceptions: the login path, paths in `QA_READONLY_ALLOW` (on the target host only), and hosts in `QA_READONLY_ALLOW_HOSTS`.
+- Service workers are blocked, and WebSocket connections are closed for every host except those in `QA_READONLY_ALLOW_HOSTS`.
+- The run fails closed: if the guard cannot be installed (for example, `TARGET_BASE_URL` does not parse), nothing runs.
 - Claude is told not to submit forms or click mutating buttons, and to mark such criteria as uncoverable.
 - The Playwright `request` fixture is disabled, and a spec that uses a Node-side HTTP client is refused before it runs.
 
@@ -146,6 +148,7 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 - **One ticket per run.** Only the main ticket of the deploy is verified.
 - **Up to three pages** are inspected: the start page and two same-host pages mentioned in the ticket.
 - **Read-only covers the browser.** Mutations made by the site's own servers as a side effect of a GET are outside the guard's reach.
+- **Redirects are not re-checked.** When an allowed request (for example, the login POST) is redirected, the browser follows the redirect without passing it through the guard again.
 
 ## Development
 

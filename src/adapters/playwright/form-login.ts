@@ -28,6 +28,37 @@ export class LoginError extends Error {
 
 const LOGIN_TIMEOUT_MS = 30_000;
 
+/** The subset of a Playwright page used to detect a successful login. */
+interface LoginSignalPage {
+  waitForURL(url: (url: URL) => boolean, options: { timeout: number }): Promise<void>;
+  locator(selector: string): { waitFor(options: { state: 'hidden'; timeout: number }): Promise<void> };
+}
+
+/** Origin plus pathname without a trailing slash, used to compare against the login page. */
+function pageKey(url: URL): string {
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+function loginPageKey(loginPath: string, baseUrl: string): string {
+  return pageKey(new URL(loginPath, baseUrl));
+}
+
+/**
+ * Without a configured success URL, a bare `load` event proves nothing (a wrong
+ * password usually reloads the login page). Success needs a positive signal:
+ * the page leaves the login URL, or the password field is detached or hidden.
+ */
+async function waitForLoginSignal(page: LoginSignalPage, loginKey: string, passwordSelector: string): Promise<void> {
+  try {
+    await Promise.any([
+      page.waitForURL((url) => pageKey(url) !== loginKey, { timeout: LOGIN_TIMEOUT_MS }),
+      page.locator(passwordSelector).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }),
+    ]);
+  } catch {
+    throw new LoginError('could not confirm successful login: still on the login page with the password field visible');
+  }
+}
+
 /**
  * Hand-written (never AI-generated) form login. Saves the authenticated storage
  * state to `<outputDir>/.auth/state.json` and returns that path.
@@ -42,10 +73,13 @@ export async function performFormLogin(
   const scrub = (text: string) =>
     [auth.password, auth.user].filter(Boolean).reduce((current, secret) => current.split(secret).join('***'), text);
 
-  const context = await browser.newContext({ baseURL: config.targetBaseUrl });
+  const readOnly = config.policy.mode === 'read-only';
+  const context = await browser.newContext(
+    readOnly ? { baseURL: config.targetBaseUrl, serviceWorkers: 'block' } : { baseURL: config.targetBaseUrl },
+  );
   let step = 'open login page';
   try {
-    if (config.policy.mode === 'read-only') {
+    if (readOnly) {
       await installReadOnlyGuard(context as unknown as RoutableTarget, {
         baseUrl: config.targetBaseUrl,
         allowedMutations: config.policy.allowedMutations,
@@ -64,13 +98,14 @@ export async function performFormLogin(
     if (auth.successUrlPattern) {
       await page.waitForURL(new RegExp(auth.successUrlPattern), { timeout: LOGIN_TIMEOUT_MS });
     } else {
-      await page.waitForLoadState('load', { timeout: LOGIN_TIMEOUT_MS });
+      await waitForLoginSignal(page, loginPageKey(auth.loginPath, config.targetBaseUrl), auth.passwordSelector);
     }
     step = 'save storage state';
     await (deps.mkdir ?? fsMkdir)(dirname(storageStatePath), { recursive: true });
     await context.storageState({ path: storageStatePath });
     return storageStatePath;
   } catch (error) {
+    if (error instanceof LoginError) throw new LoginError(scrub(error.message));
     const reason = error instanceof Error ? error.message.split('\n')[0] ?? '' : String(error);
     throw new LoginError(scrub(`Form login failed at step "${step}": ${reason}`));
   } finally {

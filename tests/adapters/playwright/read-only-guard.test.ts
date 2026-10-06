@@ -5,12 +5,16 @@ import { loadConfig } from '../../../src/config/load-config.js';
 const options = { baseUrl: 'https://shop.example.com', allowedMutations: ['/login', '/api/search', '/api/session/**', '/cart/*/view', '^/graphql/query-\\w+$'] };
 
 describe('shouldBlockRequest', () => {
-  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'post', 'delete'])('blocks %s to a non-allowed path on the target host', (method) => {
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'post', 'delete', 'PROPFIND', 'MKCOL', 'LOCK', 'PURGE', 'CUSTOM'])('blocks %s to a non-allowed path on the target host', (method) => {
     expect(shouldBlockRequest({ method, url: 'https://shop.example.com/api/orders' }, options)).toBe(true);
   });
 
-  it.each(['GET', 'HEAD', 'OPTIONS'])('lets %s through', (method) => {
+  it.each(['GET', 'HEAD', 'OPTIONS', 'get'])('lets %s through', (method) => {
     expect(shouldBlockRequest({ method, url: 'https://shop.example.com/api/orders' }, options)).toBe(false);
+  });
+
+  it('treats non-standard methods as mutating on other hosts too', () => {
+    expect(shouldBlockRequest({ method: 'PROPPATCH', url: 'https://dav.other.io/file' }, options)).toBe(true);
   });
 
   it('blocks mutations to any other host', () => {
@@ -76,6 +80,49 @@ describe('shouldBlockRequest', () => {
 });
 
 describe('installReadOnlyGuard', () => {
+  function fakeTarget() {
+    const state: {
+      handler?: (route: FakeRoute) => Promise<void>;
+      wsMatcher?: (url: URL) => boolean;
+      wsHandler?: (ws: FakeWebSocketRoute) => Promise<void> | void;
+    } = {};
+    const target = {
+      route: async (_pattern: string, routeHandler: (route: FakeRoute) => Promise<void>) => {
+        state.handler = routeHandler;
+      },
+      routeWebSocket: async (matcher: (url: URL) => boolean, wsHandler: (ws: FakeWebSocketRoute) => Promise<void> | void) => {
+        state.wsMatcher = matcher;
+        state.wsHandler = wsHandler;
+      },
+    };
+    return { target, state };
+  }
+
+  it('throws at install time when the base URL does not parse', async () => {
+    const { target, state } = fakeTarget();
+    await expect(installReadOnlyGuard(target, { baseUrl: 'not a url', allowedMutations: [] })).rejects.toThrow(/base URL/);
+    expect(state.handler).toBeUndefined();
+  });
+
+  it('refuses a target that cannot route WebSockets', async () => {
+    const target = { route: async () => undefined };
+    await expect(installReadOnlyGuard(target as never, options)).rejects.toThrow(/WebSocket/);
+  });
+
+  it('closes WebSockets to every host except the allowed hosts', async () => {
+    const { target, state } = fakeTarget();
+    const blocked = await installReadOnlyGuard(target, { ...options, allowedHosts: ['realtime.example.com'] });
+    expect(state.wsMatcher?.(new URL('wss://shop.example.com/socket'))).toBe(true);
+    expect(state.wsMatcher?.(new URL('wss://other.io/socket'))).toBe(true);
+    expect(state.wsMatcher?.(new URL('wss://Realtime.Example.com/socket'))).toBe(false);
+
+    const ws = new FakeWebSocketRoute('wss://shop.example.com/socket');
+    await state.wsHandler?.(ws);
+    expect(ws.closed).toBe(true);
+    expect(ws.connected).toBe(false);
+    expect(blocked).toEqual([{ method: 'WEBSOCKET', url: 'wss://shop.example.com/socket' }]);
+  });
+
   it('aborts blocked requests, continues the rest and records what it blocked', async () => {
     let handler: ((route: FakeRoute) => Promise<void>) | undefined;
     const target = {
@@ -83,6 +130,7 @@ describe('installReadOnlyGuard', () => {
         expect(pattern).toBe('**/*');
         handler = routeHandler;
       },
+      routeWebSocket: async () => undefined,
     };
     const blocked = await installReadOnlyGuard(target, options);
 
@@ -155,5 +203,20 @@ class FakeRoute {
   }
   async continue() {
     this.outcome = 'continue';
+  }
+}
+
+class FakeWebSocketRoute {
+  closed = false;
+  connected = false;
+  constructor(private readonly address: string) {}
+  url() {
+    return this.address;
+  }
+  async close() {
+    this.closed = true;
+  }
+  connectToServer() {
+    this.connected = true;
   }
 }

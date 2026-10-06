@@ -70,6 +70,12 @@ describe('renderConfig', () => {
     });
   });
 
+  it('blocks service workers only in read-only mode', () => {
+    const base = { playwrightModuleUrl: PW_URL, testDir: '/t', outputDir: '/o', baseUrl: 'https://x.test' };
+    expect(renderConfig({ ...base, readOnly: true })).toContain('"serviceWorkers":"block"');
+    expect(renderConfig(base)).not.toContain('serviceWorkers');
+  });
+
   it('omits storageState when there is no session', () => {
     expect(renderConfig({ playwrightModuleUrl: PW_URL, testDir: '/t', outputDir: '/o', baseUrl: 'https://x.test' })).not.toContain('storageState');
   });
@@ -179,5 +185,24 @@ describe('PlaywrightTestRunner', () => {
     expect(launched).toBe(false);
     expect(results[0]?.status).toBe('INCONCLUSIVE');
     expect(results[0]?.reason).toContain('direct HTTP client');
+  });
+
+  it.each([
+    ['test.use serviceWorkers', "test.use({ serviceWorkers: 'allow' });"],
+    ['routeWebSocket', "await page.routeWebSocket('**', (ws) => ws.connectToServer());"],
+    ['unroute', 'await context.unrouteAll();'],
+  ])('refuses to run a read-only spec that overrides a guard setting with %s', async (_label, line) => {
+    let launched = false;
+    const launch: ProcessLauncher = async () => {
+      launched = true;
+      return { exitCode: 0, stderrTail: '' };
+    };
+    const results = await runner(launch).run(
+      { ...suite, specCode: `${suite.specCode}${line}\n` },
+      { baseUrl: 'https://shop.example.com', environment: 'production', policy: { mode: 'read-only', allowedMutations: [] }, outputDir: '/nonexistent', ticket },
+    );
+    expect(launched).toBe(false);
+    expect(results[0]?.status).toBe('INCONCLUSIVE');
+    expect(results[0]?.reason).toContain('read-only guard');
   });
 });
