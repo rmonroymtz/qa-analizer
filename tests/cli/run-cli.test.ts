@@ -13,6 +13,7 @@ describe('runCli', () => {
     expect(await runCli(argv, {}, cliIo)).toBe(0);
     expect(captured.out).toContain('Usage:');
     expect(captured.out).toContain('ticket key not found');
+    expect(captured.out).toContain('--url <path>           Page to inspect first (default: pages named in the ticket, else /)');
     expect(captured.err).toBe('');
   });
 
@@ -38,7 +39,10 @@ describe('formatHumanSummary', () => {
       policyMode: 'full',
       targetBaseUrl: 'https://shop.example.com',
       commit: null,
-      pagesInspected: ['/'],
+      pagesInspected: [
+        { path: '/ofertas', source: 'ticket' },
+        { path: '/', source: 'default' },
+      ],
       results: [
         { criterionId: 'AC-1', status: 'PASSED', reason: 'test passed' },
         { criterionId: 'AC-2', status: 'FAILED', reason: 'price is discounted\nmore' },
@@ -53,6 +57,7 @@ describe('formatHumanSummary', () => {
         'QA verification: NOT_RESOLVED',
         'Ticket: SHOP-42 (from branch) — Badge',
         'Environment: staging (full) at https://shop.example.com',
+        'Pages: /ofertas (ticket), / (default)',
         'Reason: 1 of 2 criteria passed, 1 failed, 0 inconclusive',
         '  [PASSED] AC-1 — test passed',
         '  [FAILED] AC-2 — price is discounted',
@@ -81,6 +86,7 @@ describe('formatHumanSummary', () => {
     } as VerificationReport;
     const lines = formatHumanSummary(report, undefined, 2).split('\n');
     expect(lines).toContain('Ticket: not found');
+    expect(lines).toContain('Pages: none');
     expect(lines).toContain('Jira comment: not posted (no ticket to comment on)');
     expect(lines).toContain('Report: not written');
     expect(lines).toContain('Exit code: 2');

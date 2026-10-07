@@ -15,7 +15,7 @@ import { PlaywrightPageInspector } from '../adapters/playwright/page-inspector.j
 import { PlaywrightPlanRunner } from '../adapters/playwright/plan-runner.js';
 import { renderPlanAsSpec } from '../adapters/playwright/plan-spec-renderer.js';
 import { exitCodeForPolicy } from '../application/exit-code.js';
-import { VerifyTicketUseCase, type VerificationReport } from '../application/verify-ticket.js';
+import { formatPages, VerifyTicketUseCase, type VerificationReport } from '../application/verify-ticket.js';
 import { ConfigError, loadConfig, type AppConfig } from '../config/load-config.js';
 
 export const HELP = `qa-analyzer — verify a deployed Jira ticket with an AI-generated test plan run in Playwright
@@ -26,7 +26,7 @@ Usage:
 Options:
   --ticket <KEY>         Ticket key (default: QA_TICKET, then branch name, then commit message)
   --env <name>           staging | production (default: QA_ENV or BITBUCKET_DEPLOYMENT_ENVIRONMENT)
-  --url <path>           Start page to inspect (default: /)
+  --url <path>           Page to inspect first (default: pages named in the ticket, else /)
   --output-dir <dir>     Report directory (default: qa-report)
   --fail-on <policy>     not-resolved (default) | inconclusive | never
   --dry-run              Do everything except commenting on Jira
@@ -57,6 +57,7 @@ export function formatHumanSummary(report: VerificationReport, reportPath: strin
     `QA verification: ${report.verdict}`,
     `Ticket: ${report.ticket ? `${report.ticket.key} (from ${report.ticket.keySource})${report.ticket.summary ? ` — ${report.ticket.summary}` : ''}` : 'not found'}`,
     `Environment: ${report.environment} (${report.policyMode}) at ${report.targetBaseUrl}`,
+    `Pages: ${formatPages(report.pagesInspected)}`,
     `Reason: ${report.reason}`,
     ...report.results.map((result) => `  [${result.status}] ${result.criterionId} — ${result.reason.split('\n')[0]}`),
     `Jira comment: ${report.comment.posted ? 'posted' : `not posted (${report.comment.error ?? report.comment.skippedReason ?? 'n/a'})`}`,

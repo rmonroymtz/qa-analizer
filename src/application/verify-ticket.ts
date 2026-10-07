@@ -1,6 +1,7 @@
 import type { CriterionResult } from '../domain/criterion-result.js';
 import type { Environment, EnvironmentPolicy } from '../domain/environment.js';
 import type { TestPlan } from '../domain/test-plan.js';
+import { sameSite } from '../domain/site.js';
 import type { Ticket } from '../domain/ticket.js';
 import { aggregateVerdict, type Verdict } from '../domain/verdict.js';
 import type { PageInspector, PageSnapshot } from '../ports/page-inspector.js';
@@ -22,7 +23,8 @@ export interface VerifyTicketRequest {
   environment: Environment;
   policy: EnvironmentPolicy;
   targetBaseUrl: string;
-  startUrl: string;
+  /** Page to inspect first (`--url`); when undefined, the ticket pages (or `/`) are used. */
+  startUrl: string | undefined;
   outputDir: string;
   dryRun: boolean;
   comment: boolean;
@@ -70,10 +72,18 @@ export interface VerificationReport {
   policyMode: EnvironmentPolicy['mode'];
   targetBaseUrl: string;
   commit: string | null;
-  pagesInspected: string[];
+  pagesInspected: InspectedPage[];
   results: CriterionResult[];
   comment: { posted: boolean; skippedReason?: string; error?: string };
   timings: { startedAt: string; durationMs: number; steps: Record<string, number> };
+}
+
+/** Where a page to inspect came from: `--url`, the ticket text, or the `/` fallback. */
+export type PageSource = 'cli' | 'ticket' | 'default';
+
+export interface InspectedPage {
+  path: string;
+  source: PageSource;
 }
 
 export interface VerifyTicketOutcome {
@@ -92,36 +102,53 @@ function trimPunctuation(value: string): string {
 }
 
 /**
- * The start page plus up to two more same-host pages mentioned in the ticket
- * (absolute URLs on the target host, or root-relative paths), deduplicated.
+ * Pages named in the ticket, in order of appearance: the path and query (no
+ * hash) of absolute URLs on the same site as the target (same registrable
+ * domain, so production URLs map onto staging), and root-relative paths.
  */
-export function pagesToInspect(startUrl: string, ticket: Ticket, baseUrl: string, max = MAX_PAGES): string[] {
-  const base = new URL(baseUrl);
+function ticketPages(ticket: Ticket, baseUrl: string): string[] {
   const text = [ticket.summary, ticket.description, ...ticket.acceptanceCriteria.map((criterion) => criterion.text)].join('\n');
-  const candidates: string[] = [];
+  const found: { index: number; path: string }[] = [];
   for (const match of text.matchAll(URL_IN_TEXT)) {
-    try {
-      const url = new URL(trimPunctuation(match[0]));
-      if (url.host === base.host) candidates.push(`${url.pathname}${url.search}`);
-    } catch {
-      // Not a URL after all.
-    }
+    const raw = trimPunctuation(match[0]);
+    if (!sameSite(raw, baseUrl)) continue;
+    const url = new URL(raw);
+    found.push({ index: match.index, path: `${url.pathname}${url.search}` });
   }
-  const withoutUrls = text.replace(URL_IN_TEXT, ' ');
+  // Blank the URLs (keeping offsets) so their paths are not matched twice.
+  const withoutUrls = text.replace(URL_IN_TEXT, (url) => ' '.repeat(url.length));
   for (const match of withoutUrls.matchAll(PATH_IN_TEXT)) {
-    if (match[1]) candidates.push(trimPunctuation(match[1]));
+    if (match[1]) found.push({ index: match.index + match[0].length - match[1].length, path: trimPunctuation(match[1]) });
   }
+  return found.sort((a, b) => a.index - b.index).map((entry) => entry.path);
+}
+
+/**
+ * The pages to inspect, at most `max`, deduplicated: `--url` first when given,
+ * then the ticket pages in order of appearance, and `/` only when the list is
+ * otherwise empty.
+ */
+export function pagesToInspect(startUrl: string | undefined, ticket: Ticket, baseUrl: string, max = MAX_PAGES): InspectedPage[] {
+  const candidates: InspectedPage[] = [
+    ...(startUrl === undefined ? [] : [{ path: startUrl, source: 'cli' as const }]),
+    ...ticketPages(ticket, baseUrl).map((path) => ({ path, source: 'ticket' as const })),
+  ];
   const normalize = (path: string) => path.replace(/(.)\/+$/, '$1');
-  const pages: string[] = [startUrl];
-  const seen = new Set([normalize(startUrl)]);
+  const pages: InspectedPage[] = [];
+  const seen = new Set<string>();
   for (const candidate of candidates) {
     if (pages.length >= max) break;
-    const key = normalize(candidate);
+    const key = normalize(candidate.path);
     if (seen.has(key)) continue;
     seen.add(key);
     pages.push(candidate);
   }
-  return pages;
+  return pages.length > 0 ? pages : [{ path: '/', source: 'default' }];
+}
+
+/** `/ofertas (ticket), / (default)`, or `none`. */
+export function formatPages(pages: readonly InspectedPage[]): string {
+  return pages.length > 0 ? pages.map((page) => `${page.path} (${page.source})`).join(', ') : 'none';
 }
 
 function errorMessage(error: unknown): string {
@@ -169,7 +196,7 @@ export function renderSummaryMarkdown(report: VerificationReport): string {
     `- Target: ${report.targetBaseUrl}`,
     `- Commit: ${report.commit ?? 'unknown'}`,
     `- Reason: ${report.reason}`,
-    `- Pages inspected: ${report.pagesInspected.length > 0 ? report.pagesInspected.join(', ') : 'none'}`,
+    `- Pages inspected: ${formatPages(report.pagesInspected)}`,
     '',
   ];
   if (report.results.length > 0) {
@@ -189,7 +216,7 @@ interface RunState {
   key: string | undefined;
   keySource: TicketKeySource | undefined;
   ticket: Ticket | undefined;
-  pagesInspected: string[];
+  pagesInspected: InspectedPage[];
   steps: Record<string, number>;
 }
 
@@ -320,11 +347,11 @@ export class VerifyTicketUseCase {
     await this.timed(state, 'inspect', async () => {
       for (const page of pagesToInspect(request.startUrl, ticket, request.targetBaseUrl)) {
         try {
-          snapshots.push(await inspector.inspect(page));
+          snapshots.push(await inspector.inspect(page.path));
           state.pagesInspected.push(page);
         } catch (error) {
-          failures.push(`${page}: ${errorMessage(error)}`);
-          deps.reporter.log(`Page inspection failed for ${page}: ${errorMessage(error)}`);
+          failures.push(`${page.path}: ${errorMessage(error)}`);
+          deps.reporter.log(`Page inspection failed for ${page.path} (${page.source}): ${errorMessage(error)}`);
         }
       }
     });

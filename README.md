@@ -11,12 +11,14 @@ npm ci
 npm run build
 npx playwright install chromium   # not needed in the Docker image
 
-export TARGET_BASE_URL=https://staging.example.com
+export TARGET_BASE_URL=https://staging.chupaprecios.com.mx
 export JIRA_BASE_URL=https://acme.atlassian.net JIRA_EMAIL=qa@example.com JIRA_API_TOKEN=...
 export ANTHROPIC_API_KEY=...
 
 node dist/cli/main.js verify --env staging --ticket SHOP-42 --dry-run
 ```
+
+No `--url` is needed: the pages to inspect come from the ticket (see [Pages to inspect](#pages-to-inspect)).
 
 Alternatively, keep the variables in a file: `cp env.example .env`, fill it in, and run `node --env-file=.env dist/cli/main.js verify ...`. The `.env` file is git-ignored.
 
@@ -56,9 +58,25 @@ A failed criterion wins over inconclusive ones: one FAILED makes the ticket NOT_
 2. Wait until the deploy is live (`QA_READY_URL` reporting `BITBUCKET_COMMIT`, or `TARGET_BASE_URL` answering 2xx).
 3. Read the ticket and its acceptance criteria from Jira.
 4. Log in, when configured (hand-written form login, never AI-generated).
-5. Capture the accessibility snapshot of the start page plus up to two more same-host pages mentioned in the ticket.
+5. Capture the accessibility snapshot of up to three pages: `--url` when given, then the pages named in the ticket, else `/` (see below).
 6. Ask Claude for a **test plan**: JSON data, at most one test per criterion, built from a closed step vocabulary and semantic locators found in the snapshots. The plan is validated (shape, limits, relative paths, ARIA roles, criterion coverage) before anything runs.
 7. Interpret the plan in this process with the Playwright library, classify each criterion, write the report, and comment on Jira.
+
+### Pages to inspect
+
+Up to three pages are inspected, deduplicated, in this order:
+
+1. `--url`, when given.
+2. The pages named in the ticket (summary, then description, then acceptance criteria), in order of appearance:
+   - absolute URLs on the **same site** as `TARGET_BASE_URL`: the same registrable domain (eTLD+1, from the Public Suffix List, where `.com.mx` is a two-level suffix). Their path and query are applied to the target environment; the hash is dropped.
+   - root-relative paths written in the text, such as `/ofertas/laptops`.
+3. `/`, only when nothing else was found.
+
+Other domains (Figma, Google Docs, look-alikes such as `chupaprecios.com` or `evil-chupaprecios.com.mx`) are ignored. For IP addresses and `localhost`, which have no registrable domain, the host and port must match exactly.
+
+Tickets usually link production, while the run targets the environment of the deployment. With `TARGET_BASE_URL=https://staging.chupaprecios.com.mx` and a ticket that says "see https://chupaprecios.com.mx/ofertas/laptops?orden=precio and https://www.figma.com/file/abc", the inspected page is `https://staging.chupaprecios.com.mx/ofertas/laptops?orden=precio`; the Figma link is ignored. The same ticket in a production run (`TARGET_BASE_URL=https://chupaprecios.com.mx`) inspects `https://chupaprecios.com.mx/ofertas/laptops?orden=precio`. The target domain always comes from `TARGET_BASE_URL` (set per Bitbucket deployment environment), never from the branch.
+
+Each page keeps its source, `cli`, `ticket` or `default`, in `report.json` (`pagesInspected: [{ "path": "/ofertas", "source": "ticket" }]`), `summary.md` and the console summary (`Pages: /ofertas (ticket), / (default)`). A page that cannot be opened is logged and skipped; the run is INCONCLUSIVE only when none can be opened.
 
 ### The test plan
 
@@ -84,7 +102,7 @@ qa-analyzer verify [options]
 |------|---------|---------|
 | `--ticket <KEY>` | `QA_TICKET`, then branch, then commit | Ticket to verify |
 | `--env <name>` | `QA_ENV`, then `BITBUCKET_DEPLOYMENT_ENVIRONMENT` | `staging` (or `stage`), `production` (or `prod`). Must agree with `BITBUCKET_DEPLOYMENT_ENVIRONMENT` when Bitbucket sets it (see below) |
-| `--url <path>` | `/` | Start page to inspect (resolved from the host root; only plan `goto` paths keep the `TARGET_BASE_URL` path prefix) |
+| `--url <path>` | pages named in the ticket, else `/` | Page to inspect first, before the ticket pages (resolved from the host root; only plan `goto` paths keep the `TARGET_BASE_URL` path prefix) |
 | `--output-dir <dir>` | `qa-report` | Where reports and evidence go |
 | `--fail-on <policy>` | `not-resolved` | Exit code policy, see below |
 | `--dry-run` | off | Do everything except commenting on Jira |
@@ -172,7 +190,7 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 
 | Path | Content |
 |------|---------|
-| `qa-report/report.json` | Verdict, ticket key and its source, environment, commit, per-criterion results, timings. No secrets. |
+| `qa-report/report.json` | Verdict, ticket key and its source, environment, commit, pages inspected and their source, per-criterion results, timings. No secrets. |
 | `qa-report/summary.md` | Human-readable summary |
 | `qa-report/plan.json` | The validated test plan that was executed |
 | `qa-report/generated/plan.spec.ts` | The plan rendered as a readable Playwright spec, **for human review only**; qa-analyzer never executes it |
@@ -187,7 +205,7 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 - **Single snapshot.** Claude sees each page once, before any interaction. Elements that appear only after clicks or navigation are not in the snapshot, so tests for them are more likely to be INCONCLUSIVE.
 - **Closed vocabulary.** Checks that the step vocabulary cannot express (for example, visual layout, downloads, or API responses) are reported as uncoverable.
 - **One ticket per run.** Only the main ticket of the deploy is verified.
-- **Up to three pages** are inspected: the start page and two same-host pages mentioned in the ticket.
+- **Up to three pages** are inspected: `--url` and the same-site pages named in the ticket, or `/` when there are none.
 - **Read-only covers the browser.** Mutations made by the site's own servers as a side effect of a GET are outside the guard's reach.
 - **Redirects are not re-checked.** When an allowed request (for example, the login POST) is redirected, the browser follows the redirect without passing it through the guard again.
 

@@ -33,7 +33,7 @@ describe('loadConfig', () => {
     expect(config.command).toBe('verify');
     expect(config.environment).toBe('staging');
     expect(config.policy).toEqual({ mode: 'full', allowedMutations: [], allowedHosts: [] });
-    expect(config.startUrl).toBe('/');
+    expect(config.startUrl).toBeUndefined();
     expect(config.dryRun).toBe(false);
     expect(config.comment).toBe(true);
     expect(config.failOn).toBe('not-resolved');

@@ -58,7 +58,7 @@ const baseRequest: VerifyTicketRequest = {
   environment: 'staging',
   policy: { mode: 'full', allowedMutations: [], allowedHosts: [] },
   targetBaseUrl: 'https://shop.example.com',
-  startUrl: '/',
+  startUrl: undefined,
   outputDir: '/out',
   dryRun: false,
   comment: true,
@@ -296,11 +296,36 @@ describe('VerifyTicketUseCase', () => {
     expect(h.comments).toHaveLength(1);
   });
 
-  it('inspects the start URL plus up to two same-host pages from the ticket', async () => {
+  it('inspects the ticket pages in order of appearance when --url is not given', async () => {
+    const h = harness();
+    const outcome = await verify(h);
+    expect(h.inspected).toEqual(['/sale?x=1', '/products/shoes', '/deals']);
+    expect(h.written[0]?.pagesInspected).toEqual(outcome.report.pagesInspected);
+    expect(outcome.report.pagesInspected).toEqual([
+      { path: '/sale?x=1', source: 'ticket' },
+      { path: '/products/shoes', source: 'ticket' },
+      { path: '/deals', source: 'ticket' },
+    ]);
+  });
+
+  it('inspects --url first, then the ticket pages, capped at three', async () => {
     const h = harness();
     const outcome = await verify(h, { startUrl: '/home' });
     expect(h.inspected).toEqual(['/home', '/sale?x=1', '/products/shoes']);
-    expect(outcome.report.pagesInspected).toEqual(['/home', '/sale?x=1', '/products/shoes']);
+    expect(outcome.report.pagesInspected).toEqual([
+      { path: '/home', source: 'cli' },
+      { path: '/sale?x=1', source: 'ticket' },
+      { path: '/products/shoes', source: 'ticket' },
+    ]);
+  });
+
+  it('records only the pages that could be inspected, with their source', async () => {
+    const h = harness({}, { failInspect: (url) => url === '/products/shoes' });
+    const outcome = await verify(h);
+    expect(outcome.report.pagesInspected).toEqual([
+      { path: '/sale?x=1', source: 'ticket' },
+      { path: '/deals', source: 'ticket' },
+    ]);
   });
 
   it('tolerates a failed page when another succeeds', async () => {
@@ -361,19 +386,66 @@ describe('VerifyTicketUseCase', () => {
 });
 
 describe('pagesToInspect', () => {
-  it('dedupes, keeps only same-host links and caps at three', () => {
-    const many: Ticket = { ...ticket, description: '/a /b /c https://shop.example.com/a https://other.io/z', acceptanceCriteria: [] };
-    expect(pagesToInspect('/', many, 'https://shop.example.com')).toEqual(['/', '/a', '/b']);
+  const bare = (description: string, criteria: string[] = []): Ticket => ({
+    ...ticket,
+    summary: 'x',
+    description,
+    acceptanceCriteria: criteria.map((text, index) => ({ id: `AC-${index + 1}`, text })),
+  });
+  const paths = (pages: { path: string }[]) => pages.map((page) => page.path);
+
+  it('dedupes, keeps only same-site links and caps at three', () => {
+    const many = bare('/a /b /c https://shop.example.com/a https://other.io/z');
+    expect(paths(pagesToInspect(undefined, many, 'https://shop.example.com'))).toEqual(['/a', '/b', '/c']);
+    expect(paths(pagesToInspect('/', many, 'https://shop.example.com'))).toEqual(['/', '/a', '/b']);
   });
 
-  it('ignores the start URL when it already appears in the ticket', () => {
-    const one: Ticket = { ...ticket, description: 'Open https://shop.example.com/ then /cart.', acceptanceCriteria: [] };
-    expect(pagesToInspect('/', one, 'https://shop.example.com')).toEqual(['/', '/cart']);
+  it('applies the path of a production URL from the ticket to the staging target', () => {
+    const prod = bare('Revisar https://chupaprecios.com.mx/ofertas/laptops?orden=precio#top y https://www.figma.com/file/abc.');
+    expect(pagesToInspect(undefined, prod, 'https://staging.chupaprecios.com.mx')).toEqual([
+      { path: '/ofertas/laptops?orden=precio', source: 'ticket' },
+    ]);
+  });
+
+  it('ignores look-alike and other domains', () => {
+    const others = bare('https://chupaprecios.com/a https://evil-chupaprecios.com.mx/b https://docs.google.com/c');
+    expect(pagesToInspect(undefined, others, 'https://chupaprecios.com.mx')).toEqual([{ path: '/', source: 'default' }]);
+  });
+
+  it('falls back to / only when no page is named', () => {
+    expect(pagesToInspect(undefined, bare('nothing here'), 'https://shop.example.com')).toEqual([{ path: '/', source: 'default' }]);
+    expect(pagesToInspect(undefined, bare('see /cart'), 'https://shop.example.com')).toEqual([{ path: '/cart', source: 'ticket' }]);
+  });
+
+  it('puts --url first and does not repeat it when the ticket names it too', () => {
+    const one = bare('Open https://shop.example.com/ then /cart.');
+    expect(pagesToInspect('/', one, 'https://shop.example.com')).toEqual([
+      { path: '/', source: 'cli' },
+      { path: '/cart', source: 'ticket' },
+    ]);
+    expect(pagesToInspect('/cart/', one, 'https://shop.example.com')).toEqual([
+      { path: '/cart/', source: 'cli' },
+      { path: '/', source: 'ticket' },
+    ]);
+  });
+
+  it('reads the summary, description and criteria in order of appearance', () => {
+    const ordered: Ticket = { ...bare('/second', ['/third', '/fourth']), summary: 'Fix /first' };
+    expect(paths(pagesToInspect(undefined, ordered, 'https://shop.example.com'))).toEqual(['/first', '/second', '/third']);
+  });
+
+  it('keeps the order of absolute URLs and root-relative paths as written', () => {
+    const mixed = bare('/b then https://shop.example.com/a');
+    expect(paths(pagesToInspect(undefined, mixed, 'https://shop.example.com'))).toEqual(['/b', '/a']);
+  });
+
+  it('matches localhost targets by exact host and port', () => {
+    const local = bare('http://localhost:3000/a http://localhost:4000/b');
+    expect(paths(pagesToInspect(undefined, local, 'http://localhost:3000'))).toEqual(['/a']);
   });
 
   it('does not treat fractions or words with slashes as paths', () => {
-    const noisy: Ticket = { ...ticket, description: 'and/or 1/2 price', acceptanceCriteria: [] };
-    expect(pagesToInspect('/', noisy, 'https://shop.example.com')).toEqual(['/']);
+    expect(pagesToInspect(undefined, bare('and/or 1/2 price'), 'https://shop.example.com')).toEqual([{ path: '/', source: 'default' }]);
   });
 });
 
@@ -388,7 +460,10 @@ describe('renderSummaryMarkdown', () => {
       policyMode: 'read-only',
       targetBaseUrl: 'https://shop.example.com',
       commit: 'abc',
-      pagesInspected: ['/'],
+      pagesInspected: [
+        { path: '/ofertas', source: 'ticket' },
+        { path: '/', source: 'default' },
+      ],
       results: [{ criterionId: 'AC-1', status: 'FAILED', reason: 'badge visible', evidence: { expected: 'visible', actual: 'hidden' } }],
       comment: { posted: true },
       timings: { startedAt: '2026-10-06T00:00:00.000Z', durationMs: 5, steps: {} },
@@ -398,5 +473,6 @@ describe('renderSummaryMarkdown', () => {
     expect(markdown).toContain('AC-1');
     expect(markdown).toContain('badge visible');
     expect(markdown).toContain('hidden');
+    expect(markdown).toContain('- Pages inspected: /ofertas (ticket), / (default)');
   });
 });

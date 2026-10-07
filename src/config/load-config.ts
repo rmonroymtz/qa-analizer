@@ -63,8 +63,8 @@ export interface AppConfig {
   jiraProjects: string[];
   environment: Environment;
   policy: EnvironmentPolicy;
-  /** Start path or URL to inspect. */
-  startUrl: string;
+  /** Page to inspect first (`--url`); undefined lets the ticket choose the pages. */
+  startUrl: string | undefined;
   dryRun: boolean;
   comment: boolean;
   failOn: FailOnPolicy;
@@ -390,7 +390,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     jiraProjects,
     environment,
     policy: policyFor(environment, [...new Set(allowedMutations)], [...new Set(allowedHosts)]),
-    startUrl: nonEmpty(flags.url) ?? '/',
+    startUrl: nonEmpty(flags.url),
     dryRun: flags.dryRun,
     comment: !flags.noComment,
     failOn: failOn ?? 'not-resolved',
