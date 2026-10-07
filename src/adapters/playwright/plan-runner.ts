@@ -5,6 +5,7 @@ import type { EnvironmentPolicy } from '../../domain/environment.js';
 import { MUTATING_SKIPPED_REASON, type PlannedTest, type Step, type TestPlan } from '../../domain/test-plan.js';
 import type { RunContext, TestRunner } from '../../ports/test-runner.js';
 import { createPlaywrightPlanDriver } from './playwright-plan-driver.js';
+import type { SettleSettings } from './network-settle.js';
 import type { BlockedRequest } from './read-only-guard.js';
 import { classifyStepFailure, type StepFailure, type StepFailureDetail } from './step-classification.js';
 
@@ -34,6 +35,8 @@ export interface PlanDriverOptions {
   baseUrl: string;
   policy: EnvironmentPolicy;
   storageStatePath?: string;
+  /** First-party network settle wait after each `goto`; the driver's default when omitted. */
+  settle?: SettleSettings;
 }
 
 export type PlanDriverFactory = (options: PlanDriverOptions) => Promise<PlanDriver>;
@@ -43,6 +46,8 @@ export interface PlaywrightPlanRunnerOptions {
   driverFactory?: PlanDriverFactory;
   /** Overall time budget per test attempt. */
   testBudgetMs?: number;
+  /** Passed to the driver: the settle wait after each `goto`. */
+  settle?: SettleSettings;
 }
 
 export const DEFAULT_TEST_BUDGET_MS = 90_000;
@@ -79,7 +84,12 @@ export class PlaywrightPlanRunner implements TestRunner {
     let launchError: string | undefined;
     if ([...tests.values()].some((test) => !(readOnly && test.mutating))) {
       try {
-        driver = await factory({ baseUrl: ctx.baseUrl, policy: ctx.policy, ...(ctx.storageStatePath ? { storageStatePath: ctx.storageStatePath } : {}) });
+        driver = await factory({
+          baseUrl: ctx.baseUrl,
+          policy: ctx.policy,
+          ...(ctx.storageStatePath ? { storageStatePath: ctx.storageStatePath } : {}),
+          ...(this.options.settle ? { settle: this.options.settle } : {}),
+        });
       } catch (error) {
         launchError = `could not start the browser: ${errorMessage(error)}`;
       }

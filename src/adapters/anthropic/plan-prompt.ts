@@ -20,6 +20,7 @@ Plan rules:
 6. Set "mutating" to true for a test that submits a form, or creates, updates or deletes data. Opening a menu, typing into a search box or changing a filter is not mutating.
 7. Follow the environment rules in the user message. When the environment is READ-ONLY, never plan a mutating test: list such criteria in "uncoverable".
 8. When the user message says the session is already authenticated, never plan login steps.
+9. A page snapshot marked "Load incomplete" was captured while the site's own requests were still pending, so content may be missing or replaced by a loading placeholder. Never ground targets on content missing from such a snapshot and never assume it exists: list the criteria that depend on that missing content in "uncoverable" with the reason that the page had not finished loading when it was captured.
 
 Step vocabulary (fields not listed for an action must be omitted):
 - goto: { path } — a relative path starting with "/" (for example "/products?page=2"); never a full URL, "//" or "..".
@@ -137,13 +138,26 @@ export interface PlanPrompt {
   user: string;
 }
 
+function loadIncompleteNote(pendingRequests: readonly string[]): string {
+  const pending = pendingRequests.length > 0 ? ` (${pendingRequests.join(', ')})` : '';
+  return `Load incomplete: captured while first-party requests were still pending${pending}. Content may be missing; see plan rule 9.`;
+}
+
 /** Builds the prompt for one ticket. Pure: the same input always yields the same prompt. */
 export function buildPlanPrompt(input: GenerationInput): PlanPrompt {
   const { ticket } = input;
   const criteria = ticket.acceptanceCriteria.map((criterion) => `${criterion.id}: ${criterion.text}`).join('\n');
   const snapshots = input.snapshots
     .map((snapshot, index) =>
-      [`### Page ${index + 1}`, `URL: ${snapshot.url}`, `Title: ${snapshot.title}`, '```yaml', snapshot.ariaSnapshot, '```'].join('\n'),
+      [
+        `### Page ${index + 1}`,
+        `URL: ${snapshot.url}`,
+        `Title: ${snapshot.title}`,
+        ...(snapshot.loadIncomplete ? [loadIncompleteNote(snapshot.loadIncomplete.pendingRequests)] : []),
+        '```yaml',
+        snapshot.ariaSnapshot,
+        '```',
+      ].join('\n'),
     )
     .join('\n\n');
 

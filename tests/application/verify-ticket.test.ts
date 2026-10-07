@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatPages,
   pagesToInspect,
   renderSummaryMarkdown,
   VerifyTicketUseCase,
@@ -78,7 +79,7 @@ interface Harness {
   runPlans: TestPlan[];
 }
 
-function harness(overrides: Partial<VerifyTicketDeps> = {}, options: { results?: CriterionResult[]; failInspect?: (url: string) => boolean } = {}): Harness {
+function harness(overrides: Partial<VerifyTicketDeps> = {}, options: { results?: CriterionResult[]; failInspect?: (url: string) => boolean; incompleteInspect?: (url: string) => boolean } = {}): Harness {
   const h: Harness = { comments: [], written: [], logs: [], inspected: [], runContexts: [], storageStates: [], generated: [], artifacts: new Map(), runPlans: [] } as unknown as Harness;
   let time = 1_000;
   const reporter: Reporter = {
@@ -106,6 +107,7 @@ function harness(overrides: Partial<VerifyTicketDeps> = {}, options: { results?:
         inspect: async (url) => {
           h.inspected.push(url);
           if (options.failInspect?.(url)) throw new Error(`cannot open ${url}`);
+          if (options.incompleteInspect?.(url)) return { url, title: 't', ariaSnapshot: '- text: Loading', loadIncomplete: { pendingRequests: ['/api/x'] } };
           return { url, title: 't', ariaSnapshot: '- heading' };
         },
       };
@@ -326,6 +328,18 @@ describe('VerifyTicketUseCase', () => {
       { path: '/sale?x=1', source: 'ticket' },
       { path: '/deals', source: 'ticket' },
     ]);
+  });
+
+  it('marks pages whose snapshot was captured before the network settled', async () => {
+    const h = harness({}, { incompleteInspect: (url) => url === '/deals' });
+    const outcome = await verify(h);
+    expect(outcome.report.pagesInspected).toEqual([
+      { path: '/sale?x=1', source: 'ticket' },
+      { path: '/products/shoes', source: 'ticket' },
+      { path: '/deals', source: 'ticket', loadIncomplete: true },
+    ]);
+    expect(formatPages(outcome.report.pagesInspected)).toBe('/sale?x=1 (ticket), /products/shoes (ticket), /deals (ticket, load incomplete)');
+    expect(h.logs.join('\n')).toContain('/deals was captured while first-party requests were still pending: /api/x');
   });
 
   it('tolerates a failed page when another succeeds', async () => {

@@ -84,6 +84,8 @@ export type PageSource = 'cli' | 'ticket' | 'default';
 export interface InspectedPage {
   path: string;
   source: PageSource;
+  /** True when the snapshot was captured while first-party requests were still pending. */
+  loadIncomplete?: true;
 }
 
 export interface VerifyTicketOutcome {
@@ -146,9 +148,10 @@ export function pagesToInspect(startUrl: string | undefined, ticket: Ticket, bas
   return pages.length > 0 ? pages : [{ path: '/', source: 'default' }];
 }
 
-/** `/ofertas (ticket), / (default)`, or `none`. */
+/** `/ofertas (ticket), / (default, load incomplete)`, or `none`. */
 export function formatPages(pages: readonly InspectedPage[]): string {
-  return pages.length > 0 ? pages.map((page) => `${page.path} (${page.source})`).join(', ') : 'none';
+  if (pages.length === 0) return 'none';
+  return pages.map((page) => `${page.path} (${page.source}${page.loadIncomplete ? ', load incomplete' : ''})`).join(', ');
 }
 
 function errorMessage(error: unknown): string {
@@ -347,8 +350,15 @@ export class VerifyTicketUseCase {
     await this.timed(state, 'inspect', async () => {
       for (const page of pagesToInspect(request.startUrl, ticket, request.targetBaseUrl)) {
         try {
-          snapshots.push(await inspector.inspect(page.path));
-          state.pagesInspected.push(page);
+          const snapshot = await inspector.inspect(page.path);
+          snapshots.push(snapshot);
+          if (snapshot.loadIncomplete) {
+            state.pagesInspected.push({ ...page, loadIncomplete: true });
+            const pending = snapshot.loadIncomplete.pendingRequests.join(', ') || 'unknown';
+            deps.reporter.log(`Page ${page.path} was captured while first-party requests were still pending: ${pending}`);
+          } else {
+            state.pagesInspected.push(page);
+          }
         } catch (error) {
           failures.push(`${page.path}: ${errorMessage(error)}`);
           deps.reporter.log(`Page inspection failed for ${page.path} (${page.source}): ${errorMessage(error)}`);

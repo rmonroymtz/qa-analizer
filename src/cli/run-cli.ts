@@ -78,13 +78,20 @@ async function verify(config: AppConfig, io: CliIo): Promise<number> {
     tickets: new JiraTicketRepository(jira, { acField: config.jira.acField }),
     commenter: new JiraTicketCommenter(jira),
     readiness: readinessProbeFromConfig(config),
-    inspectorFor: (storageStatePath) => new PlaywrightPageInspector({ baseUrl: config.targetBaseUrl, policy: config.policy, storageStatePath }),
+    inspectorFor: (storageStatePath) =>
+      new PlaywrightPageInspector({
+        baseUrl: config.targetBaseUrl,
+        policy: config.policy,
+        storageStatePath,
+        settleQuietMs: config.settle.quietMs,
+        settleTimeoutMs: config.settle.timeoutMs,
+      }),
     generator: new ClaudeTestGenerator({
       client: new Anthropic(config.anthropic.apiKey ? { apiKey: config.anthropic.apiKey } : {}),
       model: config.anthropic.model,
     }),
     renderPlanSpec: renderPlanAsSpec,
-    runner: new PlaywrightPlanRunner(),
+    runner: new PlaywrightPlanRunner({ settle: config.settle }),
     login:
       auth.mode === 'form' && authDir
         ? async () => {

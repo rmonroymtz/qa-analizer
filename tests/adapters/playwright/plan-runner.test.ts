@@ -210,6 +210,13 @@ describe('PlaywrightPlanRunner', () => {
     expect(results[1]?.reason).toBe('not coverable: x');
   });
 
+  it('passes the network settle settings to the driver', async () => {
+    const driver = fakeDriver(() => pass);
+    const plan: TestPlan = { tests: [test('AC-1', [visible('x')])], uncoverable: [] };
+    await new PlaywrightPlanRunner({ driverFactory: driver.factory, settle: { quietMs: 500, timeoutMs: 45_000 } }).run(plan, ctx(full));
+    expect(driver.options()?.settle).toEqual({ quietMs: 500, timeoutMs: 45_000 });
+  });
+
   it('marks a criterion without a test or uncoverable entry as INCONCLUSIVE', async () => {
     const driver = fakeDriver(() => pass);
     const results = await new PlaywrightPlanRunner({ driverFactory: driver.factory }).run({ tests: [], uncoverable: [] }, ctx(full));

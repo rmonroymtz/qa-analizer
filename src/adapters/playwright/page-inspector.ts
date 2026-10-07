@@ -1,6 +1,7 @@
 import { chromium, type Browser, type BrowserContextOptions, type LaunchOptions } from '@playwright/test';
 import type { EnvironmentPolicy } from '../../domain/environment.js';
 import type { PageInspector, PageSnapshot } from '../../ports/page-inspector.js';
+import { DEFAULT_SETTLE, trackFirstPartyRequests, type NetworkSettleResult, type SettleEventSource, type SettleTimers } from './network-settle.js';
 import { installReadOnlyGuard, type BlockedRequest, type RoutableTarget } from './read-only-guard.js';
 
 export const DEFAULT_MAX_SNAPSHOT_CHARS = 30_000;
@@ -11,7 +12,12 @@ export interface PlaywrightPageInspectorOptions {
   storageStatePath?: string | undefined;
   maxSnapshotChars?: number;
   navigationTimeoutMs?: number;
-  networkIdleTimeoutMs?: number;
+  /** Quiet window with no first-party request in flight before the snapshot (default 1000 ms). */
+  settleQuietMs?: number;
+  /** Cap on that wait; at the cap the snapshot is taken and flagged `loadIncomplete` (default 30000 ms). */
+  settleTimeoutMs?: number;
+  /** Injectable for tests; defaults to real timers. */
+  settleTimers?: SettleTimers;
   launchOptions?: LaunchOptions;
   /** Injectable for tests; defaults to launching Chromium. */
   launch?: (options: LaunchOptions) => Promise<Browser>;
@@ -48,10 +54,21 @@ export class PlaywrightPageInspector implements PageInspector {
         });
       }
       const page = await context.newPage();
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: this.options.navigationTimeoutMs ?? 30_000 });
-      await page
-        .waitForLoadState('networkidle', { timeout: this.options.networkIdleTimeoutMs ?? 5_000 })
-        .catch(() => undefined);
+      // Tracked before goto so the requests the navigation starts are counted. Plain
+      // networkidle is not used: third-party analytics or polling may never go idle.
+      const network = trackFirstPartyRequests(page as unknown as SettleEventSource, {
+        baseUrl: this.options.baseUrl,
+        quietMs: this.options.settleQuietMs ?? DEFAULT_SETTLE.quietMs,
+        timeoutMs: this.options.settleTimeoutMs ?? DEFAULT_SETTLE.timeoutMs,
+        ...(this.options.settleTimers ? { timers: this.options.settleTimers } : {}),
+      });
+      let settle: NetworkSettleResult;
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: this.options.navigationTimeoutMs ?? 30_000 });
+        settle = await network.waitForSettle();
+      } finally {
+        network.dispose();
+      }
       const snapshot: PageSnapshot = {
         url: page.url(),
         title: await page.title(),
@@ -60,6 +77,7 @@ export class PlaywrightPageInspector implements PageInspector {
           this.options.maxSnapshotChars ?? DEFAULT_MAX_SNAPSHOT_CHARS,
         ),
       };
+      if (!settle.settled) snapshot.loadIncomplete = { pendingRequests: settle.pending };
       await context.close();
       return snapshot;
     } finally {

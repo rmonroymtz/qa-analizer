@@ -1,6 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type LaunchOptions, type Locator as PwLocator, type Page } from '@playwright/test';
 import { joinTargetUrl, offTargetOrigin } from '../../domain/target-url.js';
 import type { Locator, ParentTarget, Step, Target } from '../../domain/test-plan.js';
+import { DEFAULT_SETTLE, trackFirstPartyRequests, type SettleEventSource, type SettleSettings } from './network-settle.js';
 import type { PlanDriver, PlanDriverOptions, PlanSession, StepOutcome } from './plan-runner.js';
 import { installReadOnlyGuard, type BlockedRequest, type RoutableTarget } from './read-only-guard.js';
 import type { StepFailureDetail } from './step-classification.js';
@@ -174,12 +175,32 @@ export interface ExecuteStepOptions {
   /** `TARGET_BASE_URL`: `goto` paths keep its path prefix, and the page must stay on its origin. */
   baseUrl: string;
   timeouts?: StepTimeouts;
+  /**
+   * After a `goto`, wait until no first-party request has been in flight for
+   * `quietMs` (at most `timeoutMs`). Not settling is not a failure: assertions
+   * poll anyway. Omitted: no wait beyond `domcontentloaded`.
+   */
+  settle?: SettleSettings;
 }
 
-async function runStepOn(page: Page, step: Step, baseUrl: string, timeouts: StepTimeouts): Promise<StepOutcome> {
+async function navigate(page: Page, url: string, baseUrl: string, timeouts: StepTimeouts, settle: SettleSettings | undefined): Promise<void> {
+  if (settle === undefined) {
+    await page.goto(url, { timeout: timeouts.navigationMs, waitUntil: 'domcontentloaded' });
+    return;
+  }
+  const network = trackFirstPartyRequests(page as unknown as SettleEventSource, { baseUrl, ...settle });
+  try {
+    await page.goto(url, { timeout: timeouts.navigationMs, waitUntil: 'domcontentloaded' });
+    await network.waitForSettle();
+  } finally {
+    network.dispose();
+  }
+}
+
+async function runStepOn(page: Page, step: Step, options: ExecuteStepOptions, timeouts: StepTimeouts): Promise<StepOutcome> {
   if (step.action === 'goto') {
     try {
-      await page.goto(joinTargetUrl(baseUrl, step.path), { timeout: timeouts.navigationMs, waitUntil: 'domcontentloaded' });
+      await navigate(page, joinTargetUrl(options.baseUrl, step.path), options.baseUrl, timeouts, options.settle);
       return { ok: true };
     } catch (error) {
       return { ok: false, kind: 'navigation', message: firstLine(error) };
@@ -212,7 +233,7 @@ async function runStepOn(page: Page, step: Step, baseUrl: string, timeouts: Step
  * fails with the kind `off-origin`, so nothing is evaluated on a foreign page.
  */
 export async function executeStep(page: Page, step: Step, options: ExecuteStepOptions): Promise<StepOutcome> {
-  const outcome = await runStepOn(page, step, options.baseUrl, options.timeouts ?? DEFAULT_STEP_TIMEOUTS);
+  const outcome = await runStepOn(page, step, options, options.timeouts ?? DEFAULT_STEP_TIMEOUTS);
   const foreign = offTargetOrigin(page.url(), options.baseUrl);
   return foreign === undefined ? outcome : { ok: false, kind: 'off-origin', message: foreign };
 }
@@ -224,7 +245,8 @@ export type BrowserLauncher = (options: LaunchOptions) => Promise<Browser>;
  * (plan paths are joined to it with {@link joinTargetUrl}, so its path prefix is
  * kept), the optional storage state, service workers blocked (they could bypass the
  * route guard), downloads refused, and in read-only mode the guard installed on
- * the context before any page is created.
+ * the context before any page is created. Every `goto` waits for the first-party
+ * network to settle (`options.settle`, default 1 s quiet within 30 s).
  */
 export async function createPlaywrightPlanDriver(
   options: PlanDriverOptions,
@@ -259,7 +281,7 @@ export async function createPlaywrightPlanDriver(
         throw error;
       }
       return {
-        runStep: (step) => executeStep(page, step, { baseUrl: options.baseUrl, timeouts }),
+        runStep: (step) => executeStep(page, step, { baseUrl: options.baseUrl, timeouts, settle: options.settle ?? DEFAULT_SETTLE }),
         screenshot: async (path) => {
           const foreign = offTargetOrigin(page.url(), options.baseUrl);
           if (foreign !== undefined) throw new Error(`refusing to capture a page outside the target site (${foreign})`);

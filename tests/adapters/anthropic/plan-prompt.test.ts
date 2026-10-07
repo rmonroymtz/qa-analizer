@@ -80,6 +80,25 @@ describe('buildPlanPrompt', () => {
     expect(buildPlanPrompt(input({ authenticated: false })).user).not.toMatch(/already authenticated/i);
   });
 
+  it('flags a snapshot captured while first-party requests were still pending', () => {
+    const { user, system } = buildPlanPrompt(
+      input({
+        snapshots: [
+          { url: 'https://shop.example.com/p/42', title: 'Product', ariaSnapshot: '- text: Fetching Data...', loadIncomplete: { pendingRequests: ['/api/products/42'] } },
+          { url: 'https://shop.example.com/sale', title: 'Sale', ariaSnapshot: '- link "Sale"' },
+        ],
+      }),
+    );
+    expect(user).toContain('Load incomplete: captured while first-party requests were still pending (/api/products/42)');
+    expect(user.match(/Load incomplete/g)).toHaveLength(1);
+    expect(system).toMatch(/load incomplete/i);
+    expect(system).toMatch(/not coverable|uncoverable/);
+  });
+
+  it('adds no load note to complete snapshots', () => {
+    expect(buildPlanPrompt(input()).user).not.toContain('Load incomplete');
+  });
+
   it('wraps ticket and snapshot content as untrusted data', () => {
     const { user } = buildPlanPrompt(input());
     expect(user).toMatch(/<untrusted_ticket>[\s\S]*SHOP-42[\s\S]*<\/untrusted_ticket>/);

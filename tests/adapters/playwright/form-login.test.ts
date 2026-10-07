@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { Browser } from '@playwright/test';
 import { describe, expect, it } from 'vitest';
@@ -175,8 +176,9 @@ describe('PlaywrightPageInspector', () => {
     const calls: string[] = [];
     let contextOptions: unknown;
     const page = {
+      on: () => undefined,
+      off: () => undefined,
       goto: async () => undefined,
-      waitForLoadState: async () => undefined,
       url: () => 'https://app.example.com/',
       title: async () => 'Home',
       locator: () => ({ ariaSnapshot: async () => '- heading "Home"' }),
@@ -207,8 +209,70 @@ describe('PlaywrightPageInspector', () => {
     expect(snapshot.title).toBe('Home');
     expect(contextOptions).toEqual({ baseURL: 'https://app.example.com', serviceWorkers: 'block' });
     expect(calls).toEqual(['route', 'routeWebSocket']);
+    expect(snapshot.loadIncomplete).toBeUndefined();
+  });
+
+  it('snapshots after the first-party requests finish and ignores third parties', async () => {
+    const emitter = new EventEmitter();
+    const order: string[] = [];
+    const api = { url: () => 'https://api.app.example.com/products/42' };
+    const page = Object.assign(emitter, {
+      goto: async () => {
+        emitter.emit('request', { url: () => 'https://www.google-analytics.com/collect' });
+        emitter.emit('request', api);
+        setTimeout(() => {
+          order.push('api-done');
+          emitter.emit('requestfinished', api);
+        }, 30);
+      },
+      url: () => 'https://app.example.com/p/42',
+      title: async () => 'Product',
+      locator: () => ({
+        ariaSnapshot: async () => {
+          order.push('snapshot');
+          return '- heading "Product"';
+        },
+      }),
+    });
+    const inspector = new PlaywrightPageInspector({
+      baseUrl: 'https://app.example.com',
+      policy: { mode: 'full', allowedMutations: [] },
+      settleQuietMs: 10,
+      settleTimeoutMs: 1_000,
+      launch: async () => fakeInspectorBrowser(page),
+    });
+    const snapshot = await inspector.inspect('/p/42');
+    expect(order).toEqual(['api-done', 'snapshot']);
+    expect(snapshot.loadIncomplete).toBeUndefined();
+    expect(emitter.listenerCount('request')).toBe(0);
+  });
+
+  it('flags the snapshot when first-party requests are still pending at the cap', async () => {
+    const emitter = new EventEmitter();
+    const page = Object.assign(emitter, {
+      goto: async () => {
+        emitter.emit('request', { url: () => 'https://app.example.com/api/products/42?session=SECRET' });
+      },
+      url: () => 'https://app.example.com/p/42',
+      title: async () => 'Product',
+      locator: () => ({ ariaSnapshot: async () => '- text: Fetching Data...' }),
+    });
+    const inspector = new PlaywrightPageInspector({
+      baseUrl: 'https://app.example.com',
+      policy: { mode: 'full', allowedMutations: [] },
+      settleQuietMs: 10,
+      settleTimeoutMs: 30,
+      launch: async () => fakeInspectorBrowser(page),
+    });
+    const snapshot = await inspector.inspect('/p/42');
+    expect(snapshot.loadIncomplete).toEqual({ pendingRequests: ['/api/products/42'] });
   });
 });
+
+function fakeInspectorBrowser(page: unknown): Browser {
+  const context = { newPage: async () => page, close: async () => undefined };
+  return { newContext: async () => context, close: async () => undefined } as unknown as Browser;
+}
 
 describe('truncateSnapshot', () => {
   it('returns short snapshots unchanged', () => {

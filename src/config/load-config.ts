@@ -75,6 +75,16 @@ export interface AppConfig {
   git: GitContext;
   auth: AuthConfig;
   readiness: ReadinessConfig;
+  settle: SettleConfig;
+}
+
+/**
+ * Before a page snapshot and after each plan `goto`: wait until no first-party
+ * request has been in flight for `quietMs`, at most `timeoutMs`.
+ */
+export interface SettleConfig {
+  quietMs: number;
+  timeoutMs: number;
 }
 
 /** Thrown when configuration is missing or invalid. Lists every issue; never includes secret values. */
@@ -90,6 +100,8 @@ export class ConfigError extends Error {
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_READY_TIMEOUT_MS = 300_000;
+export const DEFAULT_SETTLE_QUIET_MS = 1_000;
+export const DEFAULT_SETTLE_TIMEOUT_MS = 30_000;
 const REDACTED = '***';
 const FAIL_ON_VALUES: readonly FailOnPolicy[] = ['not-resolved', 'inconclusive', 'never'];
 const PROJECT_KEY = /^[A-Z][A-Z0-9]+$/;
@@ -152,6 +164,7 @@ export function redactConfig(config: AppConfig): AppConfig {
     git: { ...config.git },
     auth,
     readiness: { ...config.readiness },
+    settle: { ...config.settle },
   };
 }
 
@@ -274,16 +287,19 @@ function loadAuth(env: NodeJS.ProcessEnv, issues: string[]): AuthConfig {
 function loadReadiness(env: NodeJS.ProcessEnv, issues: string[]): ReadinessConfig {
   const url = nonEmpty(env.QA_READY_URL);
   if (url !== undefined && !isHttpUrl(url)) issues.push('QA_READY_URL must be an absolute http(s) URL');
-  const rawTimeout = nonEmpty(env.QA_READY_TIMEOUT_MS);
-  let timeoutMs = DEFAULT_READY_TIMEOUT_MS;
-  if (rawTimeout !== undefined) {
-    timeoutMs = Number(rawTimeout);
-    if (!/^\d+$/.test(rawTimeout) || timeoutMs <= 0) {
-      issues.push('QA_READY_TIMEOUT_MS must be a positive integer (milliseconds)');
-      timeoutMs = DEFAULT_READY_TIMEOUT_MS;
-    }
+  return { url, timeoutMs: positiveMs(env, 'QA_READY_TIMEOUT_MS', DEFAULT_READY_TIMEOUT_MS, issues) };
+}
+
+/** A positive integer number of milliseconds from `env[name]`, or `fallback` when unset. */
+function positiveMs(env: NodeJS.ProcessEnv, name: string, fallback: number, issues: string[]): number {
+  const raw = nonEmpty(env[name]);
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!/^\d+$/.test(raw) || value <= 0) {
+    issues.push(`${name} must be a positive integer (milliseconds)`);
+    return fallback;
   }
-  return { url, timeoutMs };
+  return value;
 }
 
 /**
@@ -356,6 +372,10 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
 
   const auth = loadAuth(env, issues);
   const readiness = loadReadiness(env, issues);
+  const settle: SettleConfig = {
+    quietMs: positiveMs(env, 'QA_SETTLE_QUIET_MS', DEFAULT_SETTLE_QUIET_MS, issues),
+    timeoutMs: positiveMs(env, 'QA_SETTLE_TIMEOUT_MS', DEFAULT_SETTLE_TIMEOUT_MS, issues),
+  };
   const allowedHosts = splitList(env.QA_READONLY_ALLOW_HOSTS).map((host) => host.toLowerCase());
   if (allowedHosts.some((host) => !HOSTNAME.test(host))) {
     issues.push('QA_READONLY_ALLOW_HOSTS must be a comma-separated list of bare hostnames (no scheme, port or path)');
@@ -405,5 +425,6 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     },
     auth,
     readiness,
+    settle,
   });
 }

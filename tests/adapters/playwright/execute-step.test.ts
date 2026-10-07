@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import type { Page } from '@playwright/test';
 import { describe, expect, it } from 'vitest';
 import { executeStep, type StepTimeouts } from '../../../src/adapters/playwright/playwright-plan-driver.js';
@@ -247,6 +248,43 @@ describe('executeStep', () => {
       const { page, log } = fakePage([], 'about:blank');
       expect(await run(page, { action: 'goto', path: '/products?page=2' }, 'https://h.example.com/app/')).toEqual({ ok: true });
       expect(log).toEqual(['goto:https://h.example.com/app/products?page=2']);
+    });
+
+    /** A fake page whose navigation starts one first-party API request that ends after `finishAfterMs`. */
+    function loadingPage(finishAfterMs: number) {
+      const { page, log } = fakePage([], 'about:blank');
+      const emitter = new EventEmitter();
+      const api = { url: () => `${BASE}/api/products?token=x` };
+      const fake = page as unknown as { goto: (url: string) => Promise<void>; url: () => string; on: unknown; off: unknown };
+      let url = 'about:blank';
+      fake.on = emitter.on.bind(emitter);
+      fake.off = emitter.off.bind(emitter);
+      fake.url = () => url;
+      fake.goto = async (target: string) => {
+        url = target;
+        log.push('goto');
+        emitter.emit('request', api);
+        setTimeout(() => {
+          log.push('api-done');
+          emitter.emit('requestfinished', api);
+        }, finishAfterMs);
+      };
+      return { page, log, emitter };
+    }
+
+    it('waits for the first-party requests started by the navigation to settle', async () => {
+      const { page, log, emitter } = loadingPage(40);
+      const outcome = await executeStep(page, { action: 'goto', path: '/p/42' }, { baseUrl: BASE, timeouts: FAST, settle: { quietMs: 10, timeoutMs: 1_000 } });
+      expect(outcome).toEqual({ ok: true });
+      expect(log).toEqual(['goto', 'api-done']);
+      expect(emitter.listenerCount('request')).toBe(0);
+    });
+
+    it('continues without failing when the network does not settle before the cap', async () => {
+      const { page, log } = loadingPage(500);
+      const outcome = await executeStep(page, { action: 'goto', path: '/p/42' }, { baseUrl: BASE, timeouts: FAST, settle: { quietMs: 10, timeoutMs: 30 } });
+      expect(outcome).toEqual({ ok: true });
+      expect(log).toEqual(['goto']);
     });
   });
 

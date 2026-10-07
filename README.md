@@ -58,7 +58,7 @@ A failed criterion wins over inconclusive ones: one FAILED makes the ticket NOT_
 2. Wait until the deploy is live (`QA_READY_URL` reporting `BITBUCKET_COMMIT`, or `TARGET_BASE_URL` answering 2xx).
 3. Read the ticket and its acceptance criteria from Jira.
 4. Log in, when configured (hand-written form login, never AI-generated).
-5. Capture the accessibility snapshot of up to three pages: `--url` when given, then the pages named in the ticket, else `/` (see below).
+5. Capture the accessibility snapshot of up to three pages: `--url` when given, then the pages named in the ticket, else `/` (see below). Each snapshot waits for the site's own network to settle (see [Waiting for the page to load](#waiting-for-the-page-to-load)).
 6. Ask Claude for a **test plan**: JSON data, at most one test per criterion, built from a closed step vocabulary and semantic locators found in the snapshots. The plan is validated (shape, limits, relative paths, ARIA roles, criterion coverage) before anything runs.
 7. Interpret the plan in this process with the Playwright library, classify each criterion, write the report, and comment on Jira.
 
@@ -77,6 +77,12 @@ Other domains (Figma, Google Docs, look-alikes such as `chupaprecios.com` or `ev
 Tickets usually link production, while the run targets the environment of the deployment. With `TARGET_BASE_URL=https://staging.chupaprecios.com.mx` and a ticket that says "see https://chupaprecios.com.mx/ofertas/laptops?orden=precio and https://www.figma.com/file/abc", the inspected page is `https://staging.chupaprecios.com.mx/ofertas/laptops?orden=precio`; the Figma link is ignored. The same ticket in a production run (`TARGET_BASE_URL=https://chupaprecios.com.mx`) inspects `https://chupaprecios.com.mx/ofertas/laptops?orden=precio`. The target domain always comes from `TARGET_BASE_URL` (set per Bitbucket deployment environment), never from the branch.
 
 Each page keeps its source, `cli`, `ticket` or `default`, in `report.json` (`pagesInspected: [{ "path": "/ofertas", "source": "ticket" }]`), `summary.md` and the console summary (`Pages: /ofertas (ticket), / (default)`). A page that cannot be opened is logged and skipped; the run is INCONCLUSIVE only when none can be opened.
+
+### Waiting for the page to load
+
+Single-page apps render a placeholder (for example "Fetching Data...") until their data requests return, so a snapshot taken at `domcontentloaded` misses the content. Before each snapshot, and after every `goto` step of the plan, qa-analyzer waits until no **first-party** request (same registrable domain as `TARGET_BASE_URL`, so `api.chupaprecios.com.mx` counts for `staging.chupaprecios.com.mx`) has been in flight for `QA_SETTLE_QUIET_MS` (default 1 s), at most `QA_SETTLE_TIMEOUT_MS` (default 30 s). Third-party requests (analytics, CDNs on other domains) are ignored, because they may never go idle. A request blocked by the read-only guard counts as finished.
+
+When the cap is reached, the snapshot is still taken but marked as incomplete: Claude is told which first-party paths (without query strings) were pending and must not ground tests on missing content, and the page is listed as `(…, load incomplete)` in the report. After a plan `goto`, not settling is not a failure; assertions keep polling.
 
 ### The test plan
 
@@ -147,6 +153,8 @@ Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on ne
 | `QA_COMMIT_MESSAGE` | No | Commit message to search for the key (default: HEAD commit) |
 | `QA_READY_URL` | No | Health/version URL that reports the deployed commit |
 | `QA_READY_TIMEOUT_MS` | No | Readiness timeout, default `300000` |
+| `QA_SETTLE_QUIET_MS` | No | Quiet window with no first-party request in flight before a snapshot and after each plan `goto`, default `1000` |
+| `QA_SETTLE_TIMEOUT_MS` | No | Cap on that wait, default `30000`; at the cap the snapshot is flagged as load incomplete |
 | `QA_AUTH_MODE` | No | `none` (default) or `form` |
 | `TEST_USER`, `TEST_PASSWORD` | With `form` (secured) | Test account |
 | `QA_LOGIN_PATH` | With `form` | Login page path, e.g. `/login` |
@@ -203,6 +211,7 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 ## Known limitations
 
 - **Single snapshot.** Claude sees each page once, before any interaction. Elements that appear only after clicks or navigation are not in the snapshot, so tests for them are more likely to be INCONCLUSIVE.
+- **Long-lived first-party requests.** A first-party long poll or streaming request keeps the load wait open until `QA_SETTLE_TIMEOUT_MS`, and the snapshot is then flagged as load incomplete.
 - **Closed vocabulary.** Checks that the step vocabulary cannot express (for example, visual layout, downloads, or API responses) are reported as uncoverable.
 - **One ticket per run.** Only the main ticket of the deploy is verified.
 - **Up to three pages** are inspected: `--url` and the same-site pages named in the ticket, or `/` when there are none.

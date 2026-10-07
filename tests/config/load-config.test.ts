@@ -50,6 +50,7 @@ describe('loadConfig', () => {
     expect(config.anthropic.apiKey).toBeUndefined();
     expect(config.auth).toEqual({ mode: 'none' });
     expect(config.readiness).toEqual({ url: undefined, timeoutMs: 300000 });
+    expect(config.settle).toEqual({ quietMs: 1000, timeoutMs: 30000 });
     expect(config.ticket).toBeUndefined();
   });
 
@@ -201,6 +202,17 @@ describe('loadConfig', () => {
       baseEnv({ QA_READY_URL: 'https://staging.example.com/version', QA_READY_TIMEOUT_MS: '60000' }),
     );
     expect(config.readiness).toEqual({ url: 'https://staging.example.com/version', timeoutMs: 60000 });
+  });
+
+  it('parses the network settle settings', () => {
+    const config = loadConfig(['verify'], baseEnv({ QA_SETTLE_TIMEOUT_MS: '45000', QA_SETTLE_QUIET_MS: '500' }));
+    expect(config.settle).toEqual({ quietMs: 500, timeoutMs: 45000 });
+  });
+
+  it('rejects settle settings that are not positive integers', () => {
+    const error = captureError(() => loadConfig(['verify'], baseEnv({ QA_SETTLE_TIMEOUT_MS: '0', QA_SETTLE_QUIET_MS: '1.5' })));
+    expect(error.issues).toContain('QA_SETTLE_TIMEOUT_MS must be a positive integer (milliseconds)');
+    expect(error.issues).toContain('QA_SETTLE_QUIET_MS must be a positive integer (milliseconds)');
   });
 
   it('reads optional Anthropic and Jira settings', () => {
