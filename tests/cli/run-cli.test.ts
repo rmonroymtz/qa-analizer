@@ -92,4 +92,44 @@ describe('formatHumanSummary', () => {
     expect(lines).toContain('Exit code: 2');
     expect(lines.filter((line) => line.startsWith('  ['))).toEqual([]);
   });
+
+  it('lists the recorded traces with the command that opens them', () => {
+    const report = {
+      verdict: 'RESOLVED',
+      reason: '1 of 1 criteria passed, 0 failed, 0 inconclusive',
+      configError: false,
+      ticket: { key: 'SHOP-42', keySource: 'explicit' },
+      environment: 'staging',
+      policyMode: 'full',
+      targetBaseUrl: 'https://shop.example.com',
+      commit: null,
+      pagesInspected: [],
+      results: [{ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed', evidence: { tracePath: '/out/traces/AC-1.zip' } }],
+      comment: { posted: false, skippedReason: 'verdict is RESOLVED' },
+      timings: { startedAt: '', durationMs: 1, steps: {} },
+    } as VerificationReport;
+    const lines = formatHumanSummary(report, '/out/report.json', 0).split('\n');
+    const at = lines.indexOf('Traces:');
+    expect(at).toBeGreaterThan(lines.indexOf('  [PASSED] AC-1 — test passed'));
+    expect(lines[at + 1]).toBe('  AC-1: npx playwright show-trace /out/traces/AC-1.zip');
+  });
+});
+
+describe('runCli --trace', () => {
+  it('documents the flag in the help', async () => {
+    let out = '';
+    await runCli(['--help'], {}, { out: (text) => (out += text), err: () => undefined });
+    expect(out).toContain('--trace');
+  });
+
+  it('refuses tracing in production with exit 2 before running anything', async () => {
+    let err = '';
+    const code = await runCli(
+      ['verify', '--trace'],
+      { TARGET_BASE_URL: 'https://shop.example.com', QA_ENV: 'production', JIRA_BASE_URL: 'https://acme.atlassian.net', JIRA_EMAIL: 'qa@example.com', JIRA_API_TOKEN: 't' },
+      { out: () => undefined, err: (text) => (err += text) },
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('--trace / QA_TRACE is not allowed in read-only (production) runs');
+  });
 });

@@ -376,3 +376,48 @@ describe('loadConfig login mutation paths', () => {
     expect(redacted.policy.allowedMutations).toEqual([]);
   });
 });
+
+describe('loadConfig trace', () => {
+  const formAuth: NodeJS.ProcessEnv = {
+    QA_AUTH_MODE: 'form',
+    TEST_USER: 'user',
+    TEST_PASSWORD: SECRET_PASSWORD,
+    QA_LOGIN_PATH: '/login',
+    QA_LOGIN_USER_SELECTOR: '#user',
+    QA_LOGIN_PASSWORD_SELECTOR: '#pass',
+    QA_LOGIN_SUBMIT_SELECTOR: 'button',
+  };
+
+  it('is off by default', () => {
+    expect(loadConfig(['verify'], baseEnv()).trace).toBe(false);
+  });
+
+  it('is turned on by --trace or QA_TRACE=true', () => {
+    expect(loadConfig(['verify', '--trace'], baseEnv()).trace).toBe(true);
+    expect(loadConfig(['verify'], baseEnv({ QA_TRACE: 'true' })).trace).toBe(true);
+    expect(loadConfig(['verify'], baseEnv({ QA_TRACE: 'FALSE' })).trace).toBe(false);
+    expect(loadConfig(['verify', '--trace'], baseEnv({ QA_TRACE: 'false' })).trace).toBe(true);
+    expect(redactConfig(loadConfig(['verify', '--trace'], baseEnv())).trace).toBe(true);
+  });
+
+  it('rejects a QA_TRACE value that is not true or false', () => {
+    const error = captureError(() => loadConfig(['verify'], baseEnv({ QA_TRACE: 'yes' })));
+    expect(error.issues).toContain('QA_TRACE must be true or false');
+  });
+
+  it('refuses tracing in a read-only (production) run', () => {
+    const error = captureError(() => loadConfig(['verify', '--trace'], baseEnv({ QA_ENV: 'production' })));
+    expect(error.issues).toContain(
+      '--trace / QA_TRACE is not allowed in read-only (production) runs: traces record cookies, request headers and response bodies',
+    );
+    expect(() => loadConfig(['verify'], baseEnv({ QA_ENV: 'production', QA_TRACE: 'true' }))).toThrow(ConfigError);
+  });
+
+  it('refuses tracing in an authenticated run', () => {
+    const error = captureError(() => loadConfig(['verify', '--trace'], baseEnv(formAuth)));
+    expect(error.issues).toContain(
+      '--trace / QA_TRACE is not allowed with QA_AUTH_MODE=form: traces record the session cookies and authenticated responses',
+    );
+    expect(loadConfig(['verify'], baseEnv(formAuth)).trace).toBe(false);
+  });
+});

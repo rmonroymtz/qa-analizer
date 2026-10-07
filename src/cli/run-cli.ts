@@ -31,6 +31,8 @@ Options:
   --fail-on <policy>     not-resolved (default) | inconclusive | never
   --dry-run              Do everything except commenting on Jira
   --no-comment           Never comment on Jira
+  --trace                Record a Playwright trace per criterion in <output-dir>/traces
+                         (default: QA_TRACE=false; refused in production and with login)
   -h, --help             Show this help
 
 Exit codes (--fail-on not-resolved): 0 RESOLVED or INCONCLUSIVE, 1 NOT_RESOLVED,
@@ -52,6 +54,12 @@ const processIo: CliIo = {
   err: (text) => process.stderr.write(text),
 };
 
+function traceLines(report: VerificationReport): string[] {
+  const traced = report.results.filter((result) => result.evidence?.tracePath !== undefined);
+  if (traced.length === 0) return [];
+  return ['Traces:', ...traced.map((result) => `  ${result.criterionId}: npx playwright show-trace ${result.evidence?.tracePath}`)];
+}
+
 export function formatHumanSummary(report: VerificationReport, reportPath: string | undefined, exitCode: number): string {
   const lines = [
     `QA verification: ${report.verdict}`,
@@ -60,6 +68,7 @@ export function formatHumanSummary(report: VerificationReport, reportPath: strin
     `Pages: ${formatPages(report.pagesInspected)}`,
     `Reason: ${report.reason}`,
     ...report.results.map((result) => `  [${result.status}] ${result.criterionId} — ${result.reason.split('\n')[0]}`),
+    ...traceLines(report),
     `Jira comment: ${report.comment.posted ? 'posted' : `not posted (${report.comment.error ?? report.comment.skippedReason ?? 'n/a'})`}`,
     `Report: ${reportPath ?? 'not written'}`,
     `Exit code: ${exitCode}`,
@@ -91,7 +100,10 @@ async function verify(config: AppConfig, io: CliIo): Promise<number> {
       model: config.anthropic.model,
     }),
     renderPlanSpec: renderPlanAsSpec,
-    runner: new PlaywrightPlanRunner({ settle: config.settle }),
+    runner: new PlaywrightPlanRunner({
+      settle: config.settle,
+      ...(config.trace ? { trace: true, log: (message: string) => io.err(`[qa-analyzer] ${message}\n`) } : {}),
+    }),
     login:
       auth.mode === 'form' && authDir
         ? async () => {

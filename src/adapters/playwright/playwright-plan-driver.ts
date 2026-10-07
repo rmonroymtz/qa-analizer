@@ -288,6 +288,8 @@ export async function createPlaywrightPlanDriver(
           await page.screenshot({ path, fullPage: true, timeout: timeouts.actionMs });
         },
         blockedRequests: () => blocked,
+        startTracing: () => context.tracing.start({ screenshots: true, snapshots: true, sources: false }),
+        stopTracing: (path) => context.tracing.stop({ path }),
         close: () => context.close(),
       };
     },

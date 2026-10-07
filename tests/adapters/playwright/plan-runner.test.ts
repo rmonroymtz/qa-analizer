@@ -37,7 +37,11 @@ function test(criterionId: string, steps: Step[], mutating = false): PlannedTest
 const visible = (name: string): Step => ({ action: 'expectVisible', target: { role: 'heading', name } });
 
 /** Scripted outcomes keyed by the expected heading name; every session records its steps. */
-function fakeDriver(script: (step: Step, attempt: number) => StepOutcome | Promise<StepOutcome>, blocked: BlockedRequest[] = []) {
+function fakeDriver(
+  script: (step: Step, attempt: number) => StepOutcome | Promise<StepOutcome>,
+  blocked: BlockedRequest[] = [],
+  tracing: { startError?: Error; stopError?: Error } = {},
+) {
   const events: string[] = [];
   const attempts = new Map<string, number>();
   let driverOptions: PlanDriverOptions | undefined;
@@ -60,6 +64,14 @@ function fakeDriver(script: (step: Step, attempt: number) => StepOutcome | Promi
             events.push(`screenshot:${path}`);
           },
           blockedRequests: () => blocked,
+          startTracing: async () => {
+            events.push('trace-start');
+            if (tracing.startError) throw tracing.startError;
+          },
+          stopTracing: async (path) => {
+            events.push(`trace-stop:${path}`);
+            if (tracing.stopError) throw tracing.stopError;
+          },
           close: async () => {
             events.push('close-session');
           },
@@ -221,5 +233,116 @@ describe('PlaywrightPlanRunner', () => {
     const driver = fakeDriver(() => pass);
     const results = await new PlaywrightPlanRunner({ driverFactory: driver.factory }).run({ tests: [], uncoverable: [] }, ctx(full));
     expect(results.map((result) => result.reason)).toEqual(['no test generated', 'no test generated', 'no test generated']);
+  });
+
+  describe('tracing', () => {
+    const traceCtx = (): RunContext => ({ baseUrl: 'https://shop.example.com', environment: 'staging', policy: full, outputDir, ticket });
+    const plan: TestPlan = {
+      tests: [test('AC-1', [{ action: 'goto', path: '/' }, visible('Home')]), test('AC-3', [{ action: 'goto', path: '/' }, visible('Broken')])],
+      uncoverable: [{ criterionId: 'AC-2', reason: 'needs a payment' }],
+    };
+    const tracePath = (id: string) => join(outputDir, 'traces', `${id}.zip`);
+
+    it('makes no tracing call when tracing is off', async () => {
+      const driver = fakeDriver((step) => (JSON.stringify(step).includes('Broken') ? fail : pass));
+      const results = await new PlaywrightPlanRunner({ driverFactory: driver.factory }).run(plan, traceCtx());
+      expect(driver.events.some((event) => event.startsWith('trace-'))).toBe(false);
+      expect(results.some((result) => result.evidence?.tracePath !== undefined)).toBe(false);
+    });
+
+    it('records one trace per executed criterion, from before the first step until after the last', async () => {
+      const driver = fakeDriver((step) => (JSON.stringify(step).includes('Broken') ? fail : pass));
+      const results = await new PlaywrightPlanRunner({ driverFactory: driver.factory, trace: true }).run(plan, traceCtx());
+      expect(driver.events).toEqual([
+        'launch',
+        'open',
+        'trace-start',
+        'step:goto',
+        'step:expectVisible',
+        `trace-stop:${tracePath('AC-1')}`,
+        'close-session',
+        'open',
+        'trace-start',
+        'step:goto',
+        'step:expectVisible',
+        `screenshot:${join(outputDir, 'screenshots', 'AC-3.png')}`,
+        `trace-stop:${tracePath('AC-3')}`,
+        'close-session',
+        'close-browser',
+      ]);
+      expect(results[0]).toEqual({ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed', evidence: { tracePath: tracePath('AC-1') } });
+      expect(results[1]).toEqual({ criterionId: 'AC-2', status: 'INCONCLUSIVE', reason: 'not coverable: needs a payment' });
+      expect(results[2]).toMatchObject({ status: 'FAILED', evidence: { screenshotPath: join(outputDir, 'screenshots', 'AC-3.png'), tracePath: tracePath('AC-3') } });
+    });
+
+    it('sanitizes the criterion id in the trace file name', async () => {
+      const odd: Ticket = { ...ticket, acceptanceCriteria: [{ id: 'AC 1/x', text: 'a' }] };
+      const driver = fakeDriver(() => pass);
+      const [result] = await new PlaywrightPlanRunner({ driverFactory: driver.factory, trace: true }).run(
+        { tests: [test('AC 1/x', [visible('x')])], uncoverable: [] },
+        { ...traceCtx(), ticket: odd },
+      );
+      expect(result?.evidence?.tracePath).toBe(join(outputDir, 'traces', 'AC_1_x.zip'));
+    });
+
+    it('stops the trace when a test exceeds its time budget', async () => {
+      const driver = fakeDriver((step) => (step.action === 'click' ? new Promise<StepOutcome>(() => undefined) : pass));
+      const budgetPlan: TestPlan = {
+        tests: [test('AC-1', [{ action: 'goto', path: '/' }, { action: 'click', target: { role: 'button' } }, visible('x')])],
+        uncoverable: [{ criterionId: 'AC-2', reason: 'x' }, { criterionId: 'AC-3', reason: 'y' }],
+      };
+      const [result] = await new PlaywrightPlanRunner({ driverFactory: driver.factory, testBudgetMs: 20, trace: true }).run(budgetPlan, traceCtx());
+      expect(result).toMatchObject({ status: 'INCONCLUSIVE', evidence: { tracePath: tracePath('AC-1') } });
+      expect(driver.events.indexOf(`trace-stop:${tracePath('AC-1')}`)).toBeLessThan(driver.events.indexOf('close-session'));
+    });
+
+    it('stops the trace even when a step throws', async () => {
+      const driver = fakeDriver(() => {
+        throw new Error('page crashed');
+      });
+      await expect(
+        new PlaywrightPlanRunner({ driverFactory: driver.factory, trace: true }).run({ tests: [test('AC-1', [visible('x')])], uncoverable: [] }, traceCtx()),
+      ).rejects.toThrow('page crashed');
+      expect(driver.events).toContain(`trace-stop:${tracePath('AC-1')}`);
+      expect(driver.events).toContain('close-session');
+    });
+
+    it('keeps the verdict and logs a warning when tracing cannot start', async () => {
+      const warnings: string[] = [];
+      const driver = fakeDriver(() => pass, [], { startError: new Error('tracing unavailable') });
+      const [result] = await new PlaywrightPlanRunner({ driverFactory: driver.factory, trace: true, log: (message) => warnings.push(message) }).run(
+        { tests: [test('AC-1', [visible('x')])], uncoverable: [] },
+        traceCtx(),
+      );
+      expect(result).toEqual({ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed' });
+      expect(driver.events.some((event) => event.startsWith('trace-stop'))).toBe(false);
+      expect(warnings).toEqual(['Could not start the trace for AC-1: tracing unavailable']);
+    });
+
+    it('keeps the verdict and logs a warning when the trace cannot be saved', async () => {
+      const warnings: string[] = [];
+      const driver = fakeDriver((step) => (JSON.stringify(step).includes('Broken') ? fail : pass), [], { stopError: new Error('disk full') });
+      const results = await new PlaywrightPlanRunner({ driverFactory: driver.factory, trace: true, log: (message) => warnings.push(message) }).run(plan, traceCtx());
+      expect(results[0]).toEqual({ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed' });
+      expect(results[2]).toMatchObject({ status: 'FAILED', evidence: { screenshotPath: join(outputDir, 'screenshots', 'AC-3.png') } });
+      expect(results[2]?.evidence?.tracePath).toBeUndefined();
+      expect(warnings).toEqual(['Could not save the trace for AC-1: disk full', 'Could not save the trace for AC-3: disk full']);
+    });
+
+    it('never traces a read-only or authenticated run, even if asked to', async () => {
+      const warnings: string[] = [];
+      for (const context of [{ ...traceCtx(), policy: readOnly, environment: 'production' as const }, { ...traceCtx(), storageStatePath: '/tmp/state.json' }]) {
+        const driver = fakeDriver(() => pass);
+        await new PlaywrightPlanRunner({ driverFactory: driver.factory, trace: true, log: (message) => warnings.push(message) }).run(
+          { tests: [test('AC-1', [visible('x')])], uncoverable: [] },
+          context,
+        );
+        expect(driver.events.some((event) => event.startsWith('trace-'))).toBe(false);
+      }
+      expect(warnings).toEqual([
+        'Tracing skipped: traces are never recorded in read-only or authenticated runs',
+        'Tracing skipped: traces are never recorded in read-only or authenticated runs',
+      ]);
+    });
   });
 });

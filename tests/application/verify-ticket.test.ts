@@ -190,6 +190,24 @@ describe('VerifyTicketUseCase', () => {
     expect(outcome.report.comment.posted).toBe(true);
   });
 
+  it('never attaches or mentions traces in the Jira comment, but keeps them in the report', async () => {
+    const results: CriterionResult[] = [
+      { criterionId: 'AC-1', status: 'FAILED', reason: 'assertion failed', evidence: { screenshotPath: '/out/screenshots/AC-1.png', tracePath: '/out/traces/AC-1.zip' } },
+      { criterionId: 'AC-2', status: 'PASSED', reason: 'test passed', evidence: { tracePath: '/out/traces/AC-2.zip' } },
+    ];
+    const h = harness({}, { results });
+    const outcome = await verify(h);
+
+    expect(h.comments).toHaveLength(1);
+    expect(h.comments[0]?.comment.attachments).toEqual(['/out/screenshots/AC-1.png']);
+    expect(JSON.stringify(h.comments[0]?.comment)).not.toContain('.zip');
+    expect(h.comments[0]?.comment.results).toEqual([
+      { criterionId: 'AC-1', status: 'FAILED', reason: 'assertion failed', evidence: { screenshotPath: '/out/screenshots/AC-1.png' } },
+      { criterionId: 'AC-2', status: 'PASSED', reason: 'test passed' },
+    ]);
+    expect(outcome.report.results).toEqual(results);
+  });
+
   it.each([
     ['dry run', { dryRun: true }, 'dry run'],
     ['--no-comment', { comment: false }, 'comments disabled (--no-comment)'],
@@ -488,5 +506,28 @@ describe('renderSummaryMarkdown', () => {
     expect(markdown).toContain('badge visible');
     expect(markdown).toContain('hidden');
     expect(markdown).toContain('- Pages inspected: /ofertas (ticket), / (default)');
+  });
+
+  it('lists the recorded traces with the command that opens them', () => {
+    const report: VerificationReport = {
+      verdict: 'RESOLVED',
+      reason: '2 of 2 criteria passed',
+      configError: false,
+      ticket: { key: 'SHOP-42', keySource: 'explicit', summary: 'Sale badge', url: ticket.url },
+      environment: 'staging',
+      policyMode: 'full',
+      targetBaseUrl: 'https://shop.example.com',
+      commit: 'abc',
+      pagesInspected: [],
+      results: [
+        { criterionId: 'AC-1', status: 'PASSED', reason: 'test passed', evidence: { tracePath: '/out/traces/AC-1.zip' } },
+        { criterionId: 'AC-2', status: 'INCONCLUSIVE', reason: 'not coverable: x' },
+      ],
+      comment: { posted: false, skippedReason: 'verdict is RESOLVED' },
+      timings: { startedAt: '2026-10-07T00:00:00.000Z', durationMs: 5, steps: {} },
+    };
+    const markdown = renderSummaryMarkdown(report);
+    expect(markdown).toContain('## Traces\n\n- AC-1: `npx playwright show-trace /out/traces/AC-1.zip`\n');
+    expect(renderSummaryMarkdown({ ...report, results: [{ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed' }] })).not.toContain('Traces');
   });
 });

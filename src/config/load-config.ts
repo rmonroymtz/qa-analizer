@@ -76,6 +76,11 @@ export interface AppConfig {
   auth: AuthConfig;
   readiness: ReadinessConfig;
   settle: SettleConfig;
+  /**
+   * Record a Playwright trace per executed criterion (`--trace` / `QA_TRACE`).
+   * Refused in read-only and authenticated runs: traces hold cookies and responses.
+   */
+  trace: boolean;
 }
 
 /**
@@ -165,6 +170,7 @@ export function redactConfig(config: AppConfig): AppConfig {
     auth,
     readiness: { ...config.readiness },
     settle: { ...config.settle },
+    trace: config.trace,
   };
 }
 
@@ -201,6 +207,7 @@ interface ParsedFlags {
   url: string | undefined;
   dryRun: boolean;
   noComment: boolean;
+  trace: boolean;
   failOn: string | undefined;
   outputDir: string | undefined;
 }
@@ -213,6 +220,7 @@ function parseFlags(argv: string[], issues: string[]): ParsedFlags {
     url: undefined,
     dryRun: false,
     noComment: false,
+    trace: false,
     failOn: undefined,
     outputDir: undefined,
   };
@@ -227,6 +235,7 @@ function parseFlags(argv: string[], issues: string[]): ParsedFlags {
         url: { type: 'string' },
         'dry-run': { type: 'boolean' },
         'no-comment': { type: 'boolean' },
+        trace: { type: 'boolean' },
         'fail-on': { type: 'string' },
         'output-dir': { type: 'string' },
       },
@@ -238,6 +247,7 @@ function parseFlags(argv: string[], issues: string[]): ParsedFlags {
       url: values.url,
       dryRun: values['dry-run'] ?? false,
       noComment: values['no-comment'] ?? false,
+      trace: values.trace ?? false,
       failOn: values['fail-on'],
       outputDir: values['output-dir'],
     };
@@ -333,6 +343,25 @@ function resolveEnvironment(flag: string | undefined, qaEnv: string | undefined,
   return environment;
 }
 
+/**
+ * `--trace` wins over `QA_TRACE`. Traces record cookies, request headers and
+ * response bodies, so tracing fails closed in read-only and authenticated runs
+ * instead of being silently ignored.
+ */
+function resolveTrace(flag: boolean, raw: string | undefined, environment: Environment, auth: AuthConfig, issues: string[]): boolean {
+  const value = nonEmpty(raw)?.toLowerCase();
+  if (value !== undefined && value !== 'true' && value !== 'false') issues.push('QA_TRACE must be true or false');
+  const trace = flag || value === 'true';
+  if (!trace) return false;
+  if (policyFor(environment, []).mode === 'read-only') {
+    issues.push('--trace / QA_TRACE is not allowed in read-only (production) runs: traces record cookies, request headers and response bodies');
+  }
+  if (auth.mode === 'form') {
+    issues.push('--trace / QA_TRACE is not allowed with QA_AUTH_MODE=form: traces record the session cookies and authenticated responses');
+  }
+  return true;
+}
+
 function splitList(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
@@ -376,6 +405,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     quietMs: positiveMs(env, 'QA_SETTLE_QUIET_MS', DEFAULT_SETTLE_QUIET_MS, issues),
     timeoutMs: positiveMs(env, 'QA_SETTLE_TIMEOUT_MS', DEFAULT_SETTLE_TIMEOUT_MS, issues),
   };
+  const trace = resolveTrace(flags.trace, env.QA_TRACE, environment, auth, issues);
   const allowedHosts = splitList(env.QA_READONLY_ALLOW_HOSTS).map((host) => host.toLowerCase());
   if (allowedHosts.some((host) => !HOSTNAME.test(host))) {
     issues.push('QA_READONLY_ALLOW_HOSTS must be a comma-separated list of bare hostnames (no scheme, port or path)');
@@ -426,5 +456,6 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): AppConfig {
     auth,
     readiness,
     settle,
+    trace,
   });
 }

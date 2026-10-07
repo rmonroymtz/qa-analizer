@@ -11,6 +11,14 @@ function fakeBrowser(pageUrl = 'about:blank') {
       contextOptions.push(options);
       events.push('newContext');
       return {
+        tracing: {
+          start: async (options: Record<string, unknown>) => {
+            events.push(`traceStart:${JSON.stringify(options)}`);
+          },
+          stop: async (options: Record<string, unknown>) => {
+            events.push(`traceStop:${JSON.stringify(options)}`);
+          },
+        },
         route: async () => {
           events.push('route');
         },
@@ -88,5 +96,17 @@ describe('createPlaywrightPlanDriver', () => {
     const foreignSession = await (await createPlaywrightPlanDriver({ baseUrl: 'https://shop.example.com', policy: full }, async () => foreign.browser)).openSession();
     await expect(foreignSession.screenshot('/tmp/b.png')).rejects.toThrow('refusing to capture a page outside the target site (https://partner.example.net)');
     expect(foreign.events).not.toContain('screenshot');
+  });
+
+  it('records a trace on the session context with screenshots and snapshots but no sources', async () => {
+    const fake = fakeBrowser('https://shop.example.com/');
+    const session = await (await createPlaywrightPlanDriver({ baseUrl: 'https://shop.example.com', policy: full }, async () => fake.browser)).openSession();
+    expect(fake.events.some((event) => event.startsWith('trace'))).toBe(false);
+    await session.startTracing();
+    await session.stopTracing('/out/traces/AC-1.zip');
+    expect(fake.events.filter((event) => event.startsWith('trace'))).toEqual([
+      'traceStart:{"screenshots":true,"snapshots":true,"sources":false}',
+      'traceStop:{"path":"/out/traces/AC-1.zip"}',
+    ]);
   });
 });

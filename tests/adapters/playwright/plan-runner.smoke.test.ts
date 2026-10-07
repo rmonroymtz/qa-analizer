@@ -129,4 +129,18 @@ describe.skipIf(!browserAvailable)('PlaywrightPlanRunner with a real browser', (
     expect(results[4]).toEqual({ criterionId: 'AC-5', status: 'PASSED', reason: 'test passed' });
     expect(posts).toEqual([]);
   }, 60_000);
+  it('writes a Playwright trace per executed criterion when tracing is on, also for a failed test', async () => {
+    const runner = new PlaywrightPlanRunner({
+      trace: true,
+      driverFactory: (options) => createPlaywrightPlanDriver(options, undefined, { actionMs: 3_000, assertionMs: 1_500, navigationMs: 10_000, pollMs: 50 }),
+    });
+    const tracePlan: TestPlan = { tests: plan.tests.slice(0, 2), uncoverable: [] };
+    const results = await runner.run(tracePlan, { baseUrl, environment: 'staging', policy: { mode: 'full', allowedMutations: [] }, outputDir, ticket });
+
+    expect(results[0]).toEqual({ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed', evidence: { tracePath: join(outputDir, 'traces', 'AC-1.zip') } });
+    expect(results[1]).toMatchObject({ criterionId: 'AC-2', status: 'FAILED', evidence: { tracePath: join(outputDir, 'traces', 'AC-2.zip') } });
+    expect(existsSync(join(outputDir, 'traces', 'AC-1.zip'))).toBe(true);
+    expect(existsSync(join(outputDir, 'traces', 'AC-2.zip'))).toBe(true);
+    expect(existsSync(join(outputDir, 'traces', 'AC-3.zip'))).toBe(false);
+  }, 60_000);
 });

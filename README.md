@@ -113,6 +113,7 @@ qa-analyzer verify [options]
 | `--fail-on <policy>` | `not-resolved` | Exit code policy, see below |
 | `--dry-run` | off | Do everything except commenting on Jira |
 | `--no-comment` | off | Never comment on Jira |
+| `--trace` | `QA_TRACE`, else off | Record a Playwright trace per executed criterion in `<output-dir>/traces/`. Refused (exit 2) in production and with login, see [Traces](#traces-opt-in) |
 | `-h`, `--help` | | Show usage |
 
 **Environment conflicts fail closed.** In a Bitbucket deployment step, Bitbucket sets `BITBUCKET_DEPLOYMENT_ENVIRONMENT` automatically. If `--env` or `QA_ENV` is also set and names a different environment, the run stops with a configuration error (exit 2) that names both values, instead of guessing. (`--env` wins over `QA_ENV`, but must still agree with Bitbucket.) When Bitbucket's environment name is not one of `staging`/`stage`/`production`/`prod` (for example `prod-eu`), an override may only force `production`, which is read-only. Leave `QA_ENV` empty in Bitbucket.
@@ -155,6 +156,7 @@ Server errors (5xx, overloaded) are ordinary INCONCLUSIVE results. `--fail-on ne
 | `QA_READY_TIMEOUT_MS` | No | Readiness timeout, default `300000` |
 | `QA_SETTLE_QUIET_MS` | No | Quiet window with no first-party request in flight before a snapshot and after each plan `goto`, default `1000` |
 | `QA_SETTLE_TIMEOUT_MS` | No | Cap on that wait, default `30000`; at the cap the snapshot is flagged as load incomplete |
+| `QA_TRACE` | No | `true` or `false` (default). Same as `--trace`; `--trace` wins |
 | `QA_AUTH_MODE` | No | `none` (default) or `form` |
 | `TEST_USER`, `TEST_PASSWORD` | With `form` (secured) | Test account |
 | `QA_LOGIN_PATH` | With `form` | Login page path, e.g. `/login` |
@@ -203,10 +205,21 @@ See [`bitbucket-pipelines.yml`](bitbucket-pipelines.yml), an example for the **s
 | `qa-report/plan.json` | The validated test plan that was executed |
 | `qa-report/generated/plan.spec.ts` | The plan rendered as a readable Playwright spec, **for human review only**; qa-analyzer never executes it |
 | `qa-report/screenshots/<criterion>.png` | Full-page screenshot of each failed or inconclusive test (never of a page outside the target origin) |
-
-**No traces.** A Playwright trace records request headers and cookies, including the session from the login step, and `qa-report/**` is uploaded as a pipeline artifact, so no traces are recorded.
+| `qa-report/traces/<criterion>.zip` | Only with `--trace`: Playwright trace of each executed test |
 
 **Retries.** Full mode (staging) runs each test once, because a retry could replay a mutation. Read-only mode retries a failed or inconclusive test once; a test that passes only on its retry is PASSED with the note "passed on retry".
+
+### Traces (opt-in)
+
+By default no trace is recorded. With `--trace` (or `QA_TRACE=true`), each test of the plan records a Playwright trace (screenshots and DOM snapshots of every step, network and console; no sources) from its first step to its end, including failed and timed-out tests. Only plan execution is traced, never the page snapshot that grounds the plan. The trace is saved to `qa-report/traces/<criterion>.zip` (unsafe characters in the criterion id become `_`), and `summary.md` and the console list each one with the command that opens it:
+
+```sh
+npx playwright show-trace qa-report/traces/AC-1.zip
+```
+
+In Bitbucket the traces are already part of the `qa-report/**` artifacts: download them from the pipeline step and open them locally (or drop the file on [trace.playwright.dev](https://trace.playwright.dev), which runs in the browser). A tracing failure is logged as a warning and never changes a verdict.
+
+**Safety restriction.** A trace records cookies, request headers and response bodies. `--trace` is therefore refused with a configuration error (exit 2) in read-only runs (production) and when login is configured (`QA_AUTH_MODE=form`), instead of being silently ignored. Traces are never attached to the Jira comment; only failure screenshots are.
 
 ## Known limitations
 

@@ -190,6 +190,14 @@ function countSummary(results: CriterionResult[]): string {
   return `${count('PASSED')} of ${results.length} criteria passed, ${count('FAILED')} failed, ${count('INCONCLUSIVE')} inconclusive`;
 }
 
+/** Traces stay local: they can hold cookies and response bodies, so nothing about them reaches Jira. */
+function withoutTrace(result: CriterionResult): CriterionResult {
+  if (result.evidence?.tracePath === undefined) return result;
+  const { tracePath: _tracePath, ...evidence } = result.evidence;
+  const { evidence: _evidence, ...rest } = result;
+  return Object.keys(evidence).length > 0 ? { ...rest, evidence } : rest;
+}
+
 export function renderSummaryMarkdown(report: VerificationReport): string {
   const lines = [
     `# QA verification: ${report.verdict}`,
@@ -211,6 +219,10 @@ export function renderSummaryMarkdown(report: VerificationReport): string {
       lines.push(`| ${result.criterionId} | ${result.status} | ${details.join('; ').replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`);
     }
     lines.push('');
+  }
+  const traced = report.results.filter((result) => result.evidence?.tracePath !== undefined);
+  if (traced.length > 0) {
+    lines.push('## Traces', '', ...traced.map((result) => `- ${result.criterionId}: \`npx playwright show-trace ${result.evidence?.tracePath}\``), '');
   }
   return lines.join('\n');
 }
@@ -426,7 +438,7 @@ export class VerifyTicketUseCase {
         environment: report.environment,
         ...(request.commit ? { commitSha: request.commit } : {}),
         summary: report.reason,
-        results: report.results,
+        results: report.results.map(withoutTrace),
         attachments,
       });
       return { posted: true };
