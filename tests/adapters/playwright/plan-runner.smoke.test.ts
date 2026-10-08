@@ -42,6 +42,23 @@ fetch('/api/popup', { method: 'POST' }).then((response) => report(response.ok ? 
 </script>
 </body></html>`;
 
+/**
+ * Variant selectors as on the real site: option values are ASIN-like codes, not
+ * the visible labels, and one value ("4") collides with another option's label.
+ */
+const VARIANTS = `<!doctype html>
+<html><head><title>Variants</title></head><body>
+<label for="size">Size</label>
+<select id="size">
+  <option value="B0D28HQVG1">3</option>
+  <option value="B0D28HQVG3">4</option>
+  <option value="4">5</option>
+  <option value="B0D28HQVG9" disabled>6</option>
+</select>
+<button disabled>Add to cart</button>
+<button>Notify me</button>
+</body></html>`;
+
 const browserAvailable = (() => {
   try {
     return existsSync(chromium.executablePath());
@@ -96,7 +113,7 @@ describe.skipIf(!browserAvailable)('PlaywrightPlanRunner with a real browser', (
   beforeAll(async () => {
     server = createServer((request, response) => {
       if (request.method !== 'GET') posts.push(`${request.method} ${request.url}`);
-      const html = request.url === '/' ? PAGE : request.url === '/popup' ? POPUP : undefined;
+      const html = request.url === '/' ? PAGE : request.url === '/popup' ? POPUP : request.url === '/variants' ? VARIANTS : undefined;
       response.writeHead(200, { 'content-type': html ? 'text/html' : 'text/plain' });
       response.end(html ?? 'ok');
     });
@@ -142,5 +159,42 @@ describe.skipIf(!browserAvailable)('PlaywrightPlanRunner with a real browser', (
     expect(existsSync(join(outputDir, 'traces', 'AC-1.zip'))).toBe(true);
     expect(existsSync(join(outputDir, 'traces', 'AC-2.zip'))).toBe(true);
     expect(existsSync(join(outputDir, 'traces', 'AC-3.zip'))).toBe(false);
+  }, 60_000);
+
+  it('asserts disabled, enabled and selected options by visible label on a select whose values are codes', async () => {
+    const size = { role: 'combobox', name: 'Size' } as const;
+    const pick = [{ action: 'goto', path: '/variants' }, { action: 'selectOption', target: size, value: '4' }] as const;
+    const variantPlan: TestPlan = {
+      tests: [
+        {
+          criterionId: 'AC-1',
+          title: '[AC-1] pass',
+          mutating: false,
+          steps: [
+            ...pick,
+            { action: 'expectSelectedOption', target: size, value: '4' },
+            { action: 'expectDisabled', target: { role: 'option', name: '6', exact: true } },
+            { action: 'expectEnabled', target: { role: 'option', name: '5', exact: true } },
+            { action: 'expectDisabled', target: { role: 'button', name: 'Add to cart' } },
+            { action: 'expectEnabled', target: { role: 'button', name: 'Notify me' } },
+          ],
+        },
+        { criterionId: 'AC-2', title: '[AC-2] wrong option', mutating: false, steps: [...pick, { action: 'expectSelectedOption', target: size, value: '5' }] },
+        { criterionId: 'AC-3', title: '[AC-3] not disabled', mutating: false, steps: [...pick, { action: 'expectDisabled', target: { role: 'button', name: 'Notify me' } }] },
+        { criterionId: 'AC-4', title: '[AC-4] not enabled', mutating: false, steps: [...pick, { action: 'expectEnabled', target: { role: 'option', name: '6', exact: true } }] },
+        { criterionId: 'AC-5', title: '[AC-5] not a select', mutating: false, steps: [...pick, { action: 'expectSelectedOption', target: { role: 'button', name: 'Notify me' }, value: '4' }] },
+      ],
+      uncoverable: [],
+    };
+    const runner = new PlaywrightPlanRunner({
+      driverFactory: (options) => createPlaywrightPlanDriver(options, undefined, { actionMs: 3_000, assertionMs: 1_500, navigationMs: 10_000, pollMs: 50 }),
+    });
+    const results = await runner.run(variantPlan, { baseUrl, environment: 'staging', policy: { mode: 'full', allowedMutations: [] }, outputDir, ticket });
+
+    expect(results[0]).toEqual({ criterionId: 'AC-1', status: 'PASSED', reason: 'test passed' });
+    expect(results[1]).toMatchObject({ criterionId: 'AC-2', status: 'FAILED', evidence: { expected: 'selected option "5"', actual: '"4"' } });
+    expect(results[2]).toMatchObject({ criterionId: 'AC-3', status: 'FAILED', evidence: { expected: 'disabled', actual: 'enabled' } });
+    expect(results[3]).toMatchObject({ criterionId: 'AC-4', status: 'FAILED', evidence: { expected: 'enabled', actual: 'disabled' } });
+    expect(results[4]).toMatchObject({ criterionId: 'AC-5', status: 'INCONCLUSIVE', reason: expect.stringContaining('needs a native <select> target, found <button>') });
   }, 60_000);
 });

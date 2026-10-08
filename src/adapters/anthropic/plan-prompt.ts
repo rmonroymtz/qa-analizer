@@ -15,22 +15,26 @@ Plan rules:
 1. Write at most one test per acceptance criterion. Title it "[AC-n] <short description>", where AC-n is the criterion id exactly as given (for example "[AC-1] Sale badge is visible"). Every criterion id must appear exactly once: either as a test or in "uncoverable".
 2. Each test is a list of at most ${MAX_STEPS_PER_TEST} steps, run in order on a fresh browser page. Start with a "goto" step. Every string is at most ${MAX_STRING_LENGTH} characters.
 3. Ground every target in the aria snapshots: use the roles and accessible names that appear there. Never invent names, test ids, CSS or XPath.
-4. Steps that reach the state under test (goto, click, fill, selectOption, check, uncheck, press, hover, waitFor) must not check business rules. Business checks are assertion steps (expectVisible, expectHidden, expectText, expectValue, expectCount, expectUrl, expectTitle). Every test needs at least one positive assertion: expectVisible, expectText, expectValue, expectCount with a count of at least 1, or expectTitle, so the test cannot pass when its targets do not exist. expectHidden, expectCount with a count of 0 and expectUrl never count as positive on their own; a test without a positive assertion is not run and its criterion is reported as inconclusive. A failed assertion must mean that the criterion is not met.
+4. Steps that reach the state under test (goto, click, fill, selectOption, check, uncheck, press, hover, waitFor) must not check business rules. Business checks are assertion steps (expectVisible, expectHidden, expectText, expectValue, expectCount, expectUrl, expectTitle, expectDisabled, expectEnabled, expectSelectedOption). Every test needs at least one positive assertion: expectVisible, expectText, expectValue, expectCount with a count of at least 1, expectTitle, expectDisabled, expectEnabled or expectSelectedOption, so the test cannot pass when its targets do not exist. expectHidden, expectCount with a count of 0 and expectUrl never count as positive on their own; a test without a positive assertion is not run and its criterion is reported as inconclusive. A failed assertion must mean that the criterion is not met.
 5. When a criterion cannot be verified from the UI or from the provided snapshots, do not write a test for it and never write a test that passes regardless of the outcome: list it in "uncoverable" with a short reason.
 6. Set "mutating" to true for a test that submits a form, or creates, updates or deletes data. Opening a menu, typing into a search box or changing a filter is not mutating.
 7. Follow the environment rules in the user message. When the environment is READ-ONLY, never plan a mutating test: list such criteria in "uncoverable".
 8. When the user message says the session is already authenticated, never plan login steps.
 9. A page snapshot marked "Load incomplete" was captured while the site's own requests were still pending, so content may be missing or replaced by a loading placeholder. Never ground targets on content missing from such a snapshot and never assume it exists: list the criteria that depend on that missing content in "uncoverable" with the reason that the page had not finished loading when it was captured.
+10. Selects: option value attributes do not appear in the snapshots, which show option labels only. selectOption and expectSelectedOption take the visible label of the option. Never use expectValue on a select, combobox or listbox; use expectSelectedOption (a test that does is not run). To check that a button or an option (for example a sold-out size) cannot be chosen, never click a disabled element to prove it is disabled; use expectDisabled on it (an option is targeted by role "option" and its name, optionally within its combobox), and expectEnabled for one that must be available.
 
 Step vocabulary (fields not listed for an action must be omitted):
 - goto: { path } — a relative path starting with "/" (for example "/products?page=2"); never a full URL, "//" or "..".
 - click, check, uncheck, hover: { target }
-- fill, selectOption: { target, value }
+- fill: { target, value }
+- selectOption: { target, value } — value is the visible label of the option to choose, exactly as in the snapshot; never an option value attribute.
 - press: { key, target? } — a key name such as "Enter", "Escape", "ArrowDown" or "Control+A"; without a target it goes to the focused element.
 - waitFor: { target, state: "visible" | "hidden" }
 - expectVisible, expectHidden: { target }
 - expectText: { target, text, match: "contains" | "equals" } — the element's visible text.
-- expectValue: { target, value } — the current value of an input, select or textarea.
+- expectValue: { target, value } — the current value of a text input or textarea; never a select.
+- expectSelectedOption: { target, value } — the target is a native select (role combobox or listbox); value is the visible label of its selected option, compared in full.
+- expectDisabled, expectEnabled: { target } — the element (a button, form control or option) is disabled or enabled; the target must exist.
 - expectCount: { target, count } — the number of matching elements.
 - expectUrl: { pathPattern } — a plain substring of the current path and query (for example "/checkout"); not a regular expression; it must name a specific path, never "/" or wildcards alone.
 - expectTitle: { text, match: "contains" | "equals" } — the document title.

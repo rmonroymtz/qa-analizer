@@ -43,8 +43,9 @@ function stepCode(step: Step): string {
     case 'hover':
       return `await ${targetCode(step.target)}.${step.action}();`;
     case 'fill':
+      return `await ${targetCode(step.target)}.fill(${lit(step.value)});`;
     case 'selectOption':
-      return `await ${targetCode(step.target)}.${step.action}(${lit(step.value)});`;
+      return `await ${targetCode(step.target)}.selectOption({ label: ${lit(step.value)} });`;
     case 'press':
       return step.target ? `await ${targetCode(step.target)}.press(${lit(step.key)});` : `await page.keyboard.press(${lit(step.key)});`;
     case 'waitFor':
@@ -53,6 +54,12 @@ function stepCode(step: Step): string {
       return `await expect(${targetCode(step.target)}).toBeVisible();`;
     case 'expectHidden':
       return `await expect(${targetCode(step.target)}).toBeHidden();`;
+    case 'expectDisabled':
+      return `await expect(${targetCode(step.target)}).toBeDisabled();`;
+    case 'expectEnabled':
+      return `await expect(${targetCode(step.target)}).toBeEnabled();`;
+    case 'expectSelectedOption':
+      return `await expect(${targetCode(step.target)}.locator("option:checked")).toHaveText(${lit(step.value)});`;
     case 'expectText':
       return `await expect(${targetCode(step.target)}).${step.match === 'equals' ? 'toHaveText' : 'toContainText'}(${lit(step.text)});`;
     case 'expectValue':

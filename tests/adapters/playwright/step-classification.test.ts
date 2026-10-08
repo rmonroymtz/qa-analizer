@@ -31,6 +31,16 @@ describe('classifyStepFailure', () => {
     expect(result).toMatchObject({ status: 'INCONCLUSIVE', reason: 'step 1 (expectVisible): target matches 3 elements' });
   });
 
+  it('FAILED: a disabled-state assertion fails on a found element', () => {
+    const result = classifyStepFailure({ stepIndex: 1, action: 'expectDisabled', kind: 'assertion', message: 'assertion failed', targetCount: 1, expected: 'disabled', actual: 'enabled' }, []);
+    expect(result).toEqual({ status: 'FAILED', reason: 'step 2 (expectDisabled) failed: expected disabled, actual enabled', evidence: { expected: 'disabled', actual: 'enabled' } });
+  });
+
+  it('INCONCLUSIVE: expectSelectedOption on an element that is not a select', () => {
+    const result = classifyStepFailure({ stepIndex: 2, action: 'expectSelectedOption', kind: 'error', message: 'expectSelectedOption needs a native <select> target, found <div>' }, []);
+    expect(result).toEqual({ status: 'INCONCLUSIVE', reason: 'could not complete step 3 (expectSelectedOption): expectSelectedOption needs a native <select> target, found <div>' });
+  });
+
   it('INCONCLUSIVE: an assertion could not be evaluated', () => {
     const result = classifyStepFailure({ stepIndex: 0, action: 'expectValue', kind: 'error', message: 'Target page, context or browser has been closed' }, []);
     expect(result).toEqual({ status: 'INCONCLUSIVE', reason: 'could not complete step 1 (expectValue): Target page, context or browser has been closed' });

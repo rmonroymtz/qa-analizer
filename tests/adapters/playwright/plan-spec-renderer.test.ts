@@ -20,6 +20,10 @@ const plan: TestPlan = {
         { action: 'expectCount', target: { placeholder: 'Email' }, count: 2 },
         { action: 'expectUrl', pathPattern: '/sale' },
         { action: 'expectTitle', text: 'Sale', match: 'equals' },
+        { action: 'selectOption', target: { role: 'combobox', name: 'Size' }, value: '4' },
+        { action: 'expectSelectedOption', target: { role: 'combobox', name: 'Size' }, value: '4' },
+        { action: 'expectDisabled', target: { role: 'option', name: '6', exact: true } },
+        { action: 'expectEnabled', target: { role: 'button', name: 'Add to cart' } },
       ],
     },
   ],
@@ -45,6 +49,10 @@ describe('renderPlanAsSpec', () => {
     expect(spec).toContain('await expect(page.getByPlaceholder("Email")).toHaveCount(2);');
     expect(spec).toContain('expect(new URL(page.url()).pathname + new URL(page.url()).search).toContain("/sale");');
     expect(spec).toContain('await expect(page).toHaveTitle("Sale");');
+    expect(spec).toContain('await page.getByRole("combobox", { name: "Size" }).selectOption({ label: "4" });');
+    expect(spec).toContain('await expect(page.getByRole("combobox", { name: "Size" }).locator("option:checked")).toHaveText("4");');
+    expect(spec).toContain('await expect(page.getByRole("option", { name: "6", exact: true })).toBeDisabled();');
+    expect(spec).toContain('await expect(page.getByRole("button", { name: "Add to cart" })).toBeEnabled();');
     expect(spec).toContain('// AC-2 not coverable: "requires a mutating action"');
   });
 

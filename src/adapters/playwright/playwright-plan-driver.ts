@@ -60,7 +60,14 @@ interface Evaluation {
   ambiguous?: boolean;
 }
 
-/** Re-evaluates until the assertion holds or the timeout expires; returns the last evaluation. */
+/**
+ * The assertion does not apply to the element it found (for example
+ * `expectSelectedOption` on something that is not a `<select>`): retrying cannot
+ * help, so polling stops and the step fails as an `error` (INCONCLUSIVE).
+ */
+class NotApplicableError extends Error {}
+
+/** Re-evaluates until the assertion holds, the timeout expires or it cannot apply; returns the last evaluation. */
 async function poll(evaluate: () => Promise<Evaluation>, timeouts: StepTimeouts): Promise<Evaluation | { error: string }> {
   const deadline = Date.now() + timeouts.assertionMs;
   let last: Evaluation | { error: string } = { error: 'assertion was not evaluated' };
@@ -70,6 +77,7 @@ async function poll(evaluate: () => Promise<Evaluation>, timeouts: StepTimeouts)
       if (last.pass) return last;
     } catch (error) {
       last = { error: firstLine(error) };
+      if (error instanceof NotApplicableError) return last;
     }
     if (Date.now() >= deadline) return last;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, timeouts.pollMs));
@@ -86,6 +94,24 @@ async function onSingle(target: Target, locator: PwLocator, expected: string, ch
 
 function textMatches(actual: string, expected: string, match: 'contains' | 'equals'): boolean {
   return match === 'equals' ? normalizeText(actual) === normalizeText(expected) : normalizeText(actual).includes(normalizeText(expected));
+}
+
+interface SelectState {
+  /** Lower-case tag name of the element. */
+  tag: string;
+  /** Labels of the selected options; undefined when the element is not a `<select>`. */
+  selected?: string[];
+}
+
+/**
+ * Runs in the browser. `option.label` is the label attribute or else the text,
+ * which is what the user sees and what `selectOption({ label })` matches.
+ */
+function readSelectState(node: unknown): SelectState {
+  const element = node as { tagName: string; selectedOptions?: ArrayLike<{ label: string }> };
+  const tag = element.tagName.toLowerCase();
+  if (tag !== 'select' || element.selectedOptions === undefined) return { tag };
+  return { tag, selected: Array.from(element.selectedOptions, (option) => option.label) };
 }
 
 function evaluator(page: Page, step: Step): (() => Promise<Evaluation>) | undefined {
@@ -119,6 +145,27 @@ function evaluator(page: Page, step: Step): (() => Promise<Evaluation>) | undefi
         onSingle(step.target, locator, `value ${quote(step.value)}`, async (element) => {
           const value = await element.inputValue({ timeout: 1_000 });
           return { pass: value === step.value, actual: quote(value) };
+        });
+    }
+    case 'expectDisabled':
+    case 'expectEnabled': {
+      const locator = resolveTarget(page, step.target);
+      const expected = step.action === 'expectDisabled' ? 'disabled' : 'enabled';
+      return () =>
+        onSingle(step.target, locator, expected, async (element) => {
+          const actual = (await element.isDisabled({ timeout: 1_000 })) ? 'disabled' : 'enabled';
+          return { pass: actual === expected, actual };
+        });
+    }
+    case 'expectSelectedOption': {
+      const locator = resolveTarget(page, step.target);
+      return () =>
+        onSingle(step.target, locator, `selected option ${quote(step.value)}`, async (element) => {
+          const state = await element.evaluate(readSelectState, undefined, { timeout: 1_000 });
+          if (state.selected === undefined) throw new NotApplicableError(`expectSelectedOption needs a native <select> target, found <${state.tag}>`);
+          const labels = state.selected.map(normalizeText);
+          if (labels.length === 0) return { pass: false, actual: 'no selected option' };
+          return { pass: labels.includes(normalizeText(step.value)), actual: quote(labels.join(', ')) };
         });
     }
     case 'expectCount': {
@@ -157,7 +204,9 @@ async function act(step: Step, page: Page, timeouts: StepTimeouts): Promise<void
       await resolveTarget(page, step.target).fill(step.value, { timeout });
       return;
     case 'selectOption':
-      await resolveTarget(page, step.target).selectOption(step.value, { timeout });
+      // By visible label only: a plain string would also match an option's value
+      // attribute, which the model cannot see (it is often an internal code).
+      await resolveTarget(page, step.target).selectOption({ label: step.value }, { timeout });
       return;
     case 'press':
       if (step.target) await resolveTarget(page, step.target).press(step.key, { timeout });

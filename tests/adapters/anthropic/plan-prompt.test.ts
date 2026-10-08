@@ -67,6 +67,17 @@ describe('buildPlanPrompt', () => {
     expect(system).toMatch(/never "\/" or wildcards alone/);
   });
 
+  it('documents the disabled and selected-option assertions and label-based selects', () => {
+    const { system } = buildPlanPrompt(input());
+    expect(system).toContain('- expectDisabled, expectEnabled: { target }');
+    expect(system).toContain('- expectSelectedOption: { target, value }');
+    expect(system).toMatch(/selectOption: \{ target, value \} — value is the visible label of the option/);
+    expect(system).toMatch(/option value attributes do not appear in the snapshots/i);
+    expect(system).toMatch(/never use expectValue on a select, combobox or listbox; use expectSelectedOption/i);
+    expect(system).toMatch(/never click a disabled element to prove it is disabled; use expectDisabled/i);
+    expect(system).toMatch(/expectTitle, expectDisabled, expectEnabled or expectSelectedOption, so the test cannot pass/);
+  });
+
   it('includes the read-only rules only for read-only policy', () => {
     const full = buildPlanPrompt(input()).user;
     const readOnly = buildPlanPrompt(input({ policy: { mode: 'read-only', allowedMutations: ['/login'] } })).user;

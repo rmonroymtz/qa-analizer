@@ -14,6 +14,11 @@ interface El {
   testId?: string;
   hidden?: boolean;
   value?: string;
+  disabled?: boolean;
+  /** Upper-case tag name, as `Element.tagName`; defaults to DIV. */
+  tag?: string;
+  /** Labels of the selected options of a SELECT. */
+  selected?: string[];
   children?: El[];
   onClick?: () => void;
 }
@@ -88,6 +93,26 @@ class FakeLocator {
 
   async inputValue() {
     return this.one().value ?? '';
+  }
+
+  async isDisabled() {
+    return this.one().disabled === true;
+  }
+
+  async isEnabled() {
+    return this.one().disabled !== true;
+  }
+
+  /** Runs the page function on a minimal DOM-like view of the element. */
+  async evaluate<R>(fn: (node: unknown) => R): Promise<R> {
+    const element = this.one();
+    return fn({ tagName: element.tag ?? 'DIV', selectedOptions: (element.selected ?? []).map((label) => ({ label })) });
+  }
+
+  async selectOption(values: unknown) {
+    this.one();
+    this.log.push(`selectOption:${JSON.stringify(values)}`);
+    return [];
   }
 
   async click() {
@@ -192,6 +217,90 @@ describe('executeStep', () => {
     it('reports a missing target with a count of 0', async () => {
       const { page } = fakePage([]);
       expect(await run(page, { action: 'expectValue', target: { label: 'Search' }, value: 'x' })).toMatchObject({ ok: false, kind: 'assertion', targetCount: 0, actual: 'not found' });
+    });
+  });
+
+  describe('expectDisabled and expectEnabled', () => {
+    const elements: El[] = [
+      { role: 'button', name: 'Add to cart', disabled: true },
+      { role: 'button', name: 'Notify me' },
+      { role: 'option', name: '6', disabled: true },
+    ];
+
+    it('passes when the element has the expected state', async () => {
+      const { page } = fakePage(elements);
+      expect(await run(page, { action: 'expectDisabled', target: { role: 'button', name: 'Add to cart' } })).toEqual({ ok: true });
+      expect(await run(page, { action: 'expectDisabled', target: { role: 'option', name: '6' } })).toEqual({ ok: true });
+      expect(await run(page, { action: 'expectEnabled', target: { role: 'button', name: 'Notify me' } })).toEqual({ ok: true });
+    });
+
+    it('fails on a found element with the opposite state', async () => {
+      const { page } = fakePage(elements);
+      expect(await run(page, { action: 'expectDisabled', target: { role: 'button', name: 'Notify me' } })).toEqual({
+        ok: false,
+        kind: 'assertion',
+        message: 'assertion failed',
+        targetCount: 1,
+        expected: 'disabled',
+        actual: 'enabled',
+      });
+      expect(await run(page, { action: 'expectEnabled', target: { role: 'option', name: '6' } })).toMatchObject({ ok: false, kind: 'assertion', targetCount: 1, expected: 'enabled', actual: 'disabled' });
+    });
+
+    it('never passes on a target that matches nothing, and reports ambiguity', async () => {
+      const { page } = fakePage([...elements, { role: 'button', name: 'Notify me' }]);
+      expect(await run(page, { action: 'expectDisabled', target: { role: 'button', name: 'Missing' } })).toMatchObject({ ok: false, kind: 'assertion', targetCount: 0, actual: 'not found' });
+      expect(await run(page, { action: 'expectEnabled', target: { role: 'button', name: 'Missing' } })).toMatchObject({ ok: false, kind: 'assertion', targetCount: 0 });
+      expect(await run(page, { action: 'expectEnabled', target: { role: 'button', name: 'Notify me' } })).toMatchObject({ ok: false, kind: 'assertion', ambiguous: true, targetCount: 2 });
+    });
+  });
+
+  describe('expectSelectedOption', () => {
+    const size: El = { role: 'combobox', name: 'Size', tag: 'SELECT', selected: [' 4 '] };
+
+    it('compares the label of the selected option, whitespace-normalized', async () => {
+      const { page } = fakePage([size]);
+      expect(await run(page, { action: 'expectSelectedOption', target: { role: 'combobox', name: 'Size' }, value: '4' })).toEqual({ ok: true });
+      expect(await run(page, { action: 'expectSelectedOption', target: { role: 'combobox', name: 'Size' }, value: '5' })).toEqual({
+        ok: false,
+        kind: 'assertion',
+        message: 'assertion failed',
+        targetCount: 1,
+        expected: 'selected option "5"',
+        actual: '"4"',
+      });
+    });
+
+    it('requires an exact label, not a substring', async () => {
+      const { page } = fakePage([{ ...size, selected: ['14'] }]);
+      expect(await run(page, { action: 'expectSelectedOption', target: { role: 'combobox' }, value: '4' })).toMatchObject({ ok: false, kind: 'assertion', actual: '"14"' });
+    });
+
+    it('reports a select without a selected option', async () => {
+      const { page } = fakePage([{ ...size, selected: [] }]);
+      expect(await run(page, { action: 'expectSelectedOption', target: { role: 'combobox' }, value: '4' })).toMatchObject({ ok: false, kind: 'assertion', actual: 'no selected option' });
+    });
+
+    it('fails as an error, without polling, when the target is not a select element', async () => {
+      const { page } = fakePage([{ role: 'combobox', name: 'Size', tag: 'INPUT' }]);
+      const slow: StepTimeouts = { ...FAST, assertionMs: 5_000 };
+      const started = Date.now();
+      const outcome = await executeStep(page, { action: 'expectSelectedOption', target: { role: 'combobox' }, value: '4' }, { baseUrl: BASE, timeouts: slow });
+      expect(outcome).toEqual({ ok: false, kind: 'error', message: 'expectSelectedOption needs a native <select> target, found <input>' });
+      expect(Date.now() - started).toBeLessThan(1_000);
+    });
+
+    it('reports a missing target with a count of 0', async () => {
+      const { page } = fakePage([]);
+      expect(await run(page, { action: 'expectSelectedOption', target: { role: 'combobox' }, value: '4' })).toMatchObject({ ok: false, kind: 'assertion', targetCount: 0 });
+    });
+  });
+
+  describe('selectOption', () => {
+    it('selects by the visible option label only, never by the value attribute', async () => {
+      const { page, log } = fakePage([{ role: 'combobox', name: 'Size', tag: 'SELECT' }]);
+      expect(await run(page, { action: 'selectOption', target: { role: 'combobox', name: 'Size' }, value: '4' })).toEqual({ ok: true });
+      expect(log).toEqual(['selectOption:{"label":"4"}']);
     });
   });
 

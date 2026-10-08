@@ -4,6 +4,7 @@ import {
   ARIA_ROLES,
   MAX_STEPS_PER_TEST,
   MAX_STRING_LENGTH,
+  EXPECT_VALUE_ON_SELECT_REASON,
   MUTATING_SKIPPED_REASON,
   NO_POSITIVE_ASSERTION_REASON,
   PlanValidationError,
@@ -82,6 +83,9 @@ describe('validateTestPlan', () => {
       { action: 'expectCount', target: { role: 'listitem', within: { role: 'list', name: 'Results', nth: 1 } }, count: 3 },
       { action: 'expectUrl', pathPattern: '/products' },
       { action: 'expectTitle', text: 'Products', match: 'equals' },
+      { action: 'expectDisabled', target: { role: 'option', name: '6', exact: true, within: { role: 'combobox', name: 'Size' } } },
+      { action: 'expectEnabled', target: { role: 'button', name: 'Add to cart' } },
+      { action: 'expectSelectedOption', target: { role: 'combobox', name: 'Size' }, value: '4' },
     ];
     expect(violationsOf(withSteps(steps))).toEqual([]);
   });
@@ -198,6 +202,9 @@ describe('validateTestPlan', () => {
       ['expectValue', { action: 'expectValue', target: { label: 'Search' }, value: '' }],
       ['expectCount with a count of at least 1', { action: 'expectCount', target: { role: 'listitem' }, count: 1 }],
       ['expectTitle', { action: 'expectTitle', text: 'Sale', match: 'contains' }],
+      ['expectDisabled', { action: 'expectDisabled', target: { role: 'option', name: '6' } }],
+      ['expectEnabled', { action: 'expectEnabled', target: { role: 'button', name: 'Buy' } }],
+      ['expectSelectedOption', { action: 'expectSelectedOption', target: { role: 'combobox', name: 'Size' }, value: '4' }],
     ])('keeps a test whose positive assertion is %s', (_label, step) => {
       const result = validateTestPlan(withSteps([{ action: 'goto', path: '/' }, { action: 'expectHidden', target: { text: 'Loading' } }, step]), ticket, full);
       expect(result.tests.map((test) => test.criterionId)).toEqual(['AC-1']);
@@ -221,8 +228,32 @@ describe('validateTestPlan', () => {
 
     it('explains the rule in the uncoverable reason', () => {
       expect(NO_POSITIVE_ASSERTION_REASON).toBe(
-        'no positive assertion: the test needs an expectVisible, expectText, expectValue, expectCount (count of at least 1) or expectTitle step, so it cannot pass when its targets do not exist',
+        'no positive assertion: the test needs an expectVisible, expectText, expectValue, expectCount (count of at least 1), expectTitle, expectDisabled, expectEnabled or expectSelectedOption step, so it cannot pass when its targets do not exist',
       );
+    });
+  });
+
+  describe('expectValue on a select', () => {
+    it.each(['combobox', 'listbox'])('moves a test with expectValue on a %s to uncoverable, in every mode', (role) => {
+      for (const policy of [full, readOnly]) {
+        const steps = [{ action: 'goto', path: '/' }, { action: 'expectVisible', target: { role: 'heading' } }, { action: 'expectValue', target: { role, name: 'Size' }, value: '4' }];
+        const result = validateTestPlan(withSteps(steps), ticket, policy);
+        expect(result.tests).toEqual([]);
+        expect(result.uncoverable).toContainEqual({ criterionId: 'AC-1', reason: EXPECT_VALUE_ON_SELECT_REASON });
+      }
+    });
+
+    it('explains the rule in the uncoverable reason', () => {
+      expect(EXPECT_VALUE_ON_SELECT_REASON).toMatch(/expectValue on a select.*option value attributes.*expectSelectedOption/);
+    });
+
+    it('keeps expectValue on other targets', () => {
+      const result = validateTestPlan(withSteps([{ action: 'expectValue', target: { role: 'textbox', name: 'Search' }, value: 'shoes' }]), ticket, full);
+      expect(result.tests).toHaveLength(1);
+    });
+
+    it('requires a non-empty option label for expectSelectedOption', () => {
+      expect(violationsOf(withSteps([{ action: 'expectSelectedOption', target: { role: 'combobox' }, value: ' ' }])).join('\n')).toMatch(/value: must not be empty/);
     });
   });
 

@@ -62,8 +62,12 @@ export type Step =
   | { action: 'press'; key: string; target?: Target }
   | { action: 'waitFor'; target: Target; state: 'visible' | 'hidden' }
   | { action: 'expectVisible' | 'expectHidden'; target: Target }
+  /** Disabled or enabled state of a found element: a button, a form control or an `<option>`. */
+  | { action: 'expectDisabled' | 'expectEnabled'; target: Target }
   | { action: 'expectText'; target: Target; text: string; match: TextMatch }
   | { action: 'expectValue'; target: Target; value: string }
+  /** `value` is the visible label of the selected option of a native `<select>`, never its value attribute. */
+  | { action: 'expectSelectedOption'; target: Target; value: string }
   | { action: 'expectCount'; target: Target; count: number }
   | { action: 'expectUrl'; pathPattern: string }
   | { action: 'expectTitle'; text: string; match: TextMatch };
@@ -73,10 +77,12 @@ export type StepAction = Step['action'];
 export const STEP_ACTIONS = [
   'goto', 'click', 'fill', 'selectOption', 'check', 'uncheck', 'press', 'hover', 'waitFor',
   'expectVisible', 'expectHidden', 'expectText', 'expectValue', 'expectCount', 'expectUrl', 'expectTitle',
+  'expectDisabled', 'expectEnabled', 'expectSelectedOption',
 ] as const satisfies readonly StepAction[];
 
 export const ASSERTION_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>([
   'expectVisible', 'expectHidden', 'expectText', 'expectValue', 'expectCount', 'expectUrl', 'expectTitle',
+  'expectDisabled', 'expectEnabled', 'expectSelectedOption',
 ]);
 
 export function isAssertion(step: Step): boolean {
@@ -89,11 +95,18 @@ const MAX_KEY_LENGTH = 50;
 const MAX_COUNT = 10_000;
 export const MUTATING_SKIPPED_REASON = 'mutating test skipped in read-only mode';
 export const NO_POSITIVE_ASSERTION_REASON =
-  'no positive assertion: the test needs an expectVisible, expectText, expectValue, expectCount (count of at least 1) or expectTitle step, so it cannot pass when its targets do not exist';
+  'no positive assertion: the test needs an expectVisible, expectText, expectValue, expectCount (count of at least 1), expectTitle, expectDisabled, expectEnabled or expectSelectedOption step, so it cannot pass when its targets do not exist';
+export const EXPECT_VALUE_ON_SELECT_REASON =
+  'expectValue on a select (role combobox or listbox) compares option value attributes, which are not visible in the page snapshots; the plan must use expectSelectedOption with the visible option label';
+
+/** Roles of select-like targets whose `inputValue` is an option value attribute, not what the user sees. */
+const SELECT_ROLES: ReadonlySet<string> = new Set(['combobox', 'listbox']);
 
 /**
  * An assertion that can only pass when something real is on the page: a target
- * that must resolve to an element, or the document title. `expectHidden`,
+ * that must resolve to exactly one element (`expectDisabled` and `expectEnabled`
+ * too: a disabled state is only asserted on an element that exists), or the
+ * document title. `expectHidden`,
  * `expectCount` of 0 and `expectUrl` also pass when a hallucinated target matches
  * nothing, so they never ground a test on their own.
  */
@@ -103,12 +116,19 @@ export function isPositiveAssertion(step: Step): boolean {
     case 'expectText':
     case 'expectValue':
     case 'expectTitle':
+    case 'expectDisabled':
+    case 'expectEnabled':
+    case 'expectSelectedOption':
       return true;
     case 'expectCount':
       return step.count >= 1;
     default:
       return false;
   }
+}
+
+function isExpectValueOnSelect(step: Step): boolean {
+  return step.action === 'expectValue' && 'role' in step.target && SELECT_ROLES.has(step.target.role);
 }
 
 /** A path pattern made only of slashes, wildcards and whitespace matches every URL. */
@@ -246,11 +266,15 @@ function checkStep(raw: unknown, where: string, c: Checker): Step | undefined {
     case 'hover':
     case 'expectVisible':
     case 'expectHidden':
+    case 'expectDisabled':
+    case 'expectEnabled':
       return all({ action, target: target() });
     case 'fill':
     case 'selectOption':
     case 'expectValue':
       return all({ action, target: target(), value: c.string(raw.value, `${where}.value`, { allowEmpty: true }) });
+    case 'expectSelectedOption':
+      return all({ action, target: target(), value: c.string(raw.value, `${where}.value`) });
     case 'press': {
       const key = typeof raw.key === 'string' && raw.key.length <= MAX_KEY_LENGTH && KEY.test(raw.key) ? raw.key : c.fail(`${where}.key`, 'must be a Playwright key name such as Enter or Control+A');
       const pressTarget = raw.target === undefined ? undefined : target();
@@ -309,7 +333,10 @@ function checkUncoverable(raw: unknown, where: string, c: Checker): UncoverableC
  * - grounding, in every mode: a test without a positive assertion (see
  *   {@link isPositiveAssertion}) is moved to `uncoverable` too. Only that test's
  *   criterion becomes INCONCLUSIVE; rejecting the whole plan would discard every
- *   other valid test of the run.
+ *   other valid test of the run;
+ * - selects, in every mode: a test with `expectValue` on a `combobox` or
+ *   `listbox` role is moved to `uncoverable` as well, because it would compare
+ *   option value attributes (often internal codes) that the model cannot see.
  * Throws a {@link PlanValidationError} listing every violation.
  */
 export function validateTestPlan(raw: unknown, ticket: Pick<Ticket, 'acceptanceCriteria'>, policy: Pick<EnvironmentPolicy, 'mode'>): TestPlan {
@@ -338,6 +365,7 @@ export function validateTestPlan(raw: unknown, ticket: Pick<Ticket, 'acceptanceC
   const skipReason = (test: PlannedTest): string | undefined => {
     if (policy.mode === 'read-only' && test.mutating) return MUTATING_SKIPPED_REASON;
     if (!test.steps.some(isPositiveAssertion)) return NO_POSITIVE_ASSERTION_REASON;
+    if (test.steps.some(isExpectValueOnSelect)) return EXPECT_VALUE_ON_SELECT_REASON;
     return undefined;
   };
   const validTests = tests as PlannedTest[];
