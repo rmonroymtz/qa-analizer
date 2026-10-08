@@ -96,3 +96,11 @@ Manual verification of deployed tickets is slow and inconsistent. AI-generated t
 ## Next step
 
 Try `--trace` on a staging run (no login) and open a trace with `npx playwright show-trace`. Re-run CHUP-2223 on staging to confirm the product page snapshot now shows the size/color selectors (or is flagged load incomplete), that AC-8–AC-11 are now planned with `expectDisabled`, and that AC-14 uses `expectSelectedOption`. The pending user decision on how a missing assertion target is classified (now INCONCLUSIVE, isolated in `src/adapters/playwright/step-classification.ts`). Validate `docker build`. Decide the PR chain strategy and open the PR(s). Decide whether the inspector, `--url` and the login should also keep the `TARGET_BASE_URL` path prefix.
+
+## Paused (2026-10-08)
+
+Work paused by the user after T15. Proposed T16 (capture first-party API JSON responses, inject `debug_html: true` into staging POSTs to `/api/v1/product/`, extract Amazon variant data from the returned HTML) was **cancelled for now**; not implemented. Findings kept for a possible resume:
+- `POST /api/v1/product/` with body `{sku, store, engine_id, debug_html: true}` returns `debug_html` (~1.4 MB Amazon HTML) next to `data`.
+- That HTML holds `variationValues`, `dimensionToAsinMap`, `dimensionValuesDisplayData` and `num_total_variations` (combinations that exist), but no per-ASIN stock signal was found.
+- For B0D28HQVG3 the response had `has_variants: true` with empty `variants` and `combinations`. Amazon also lists B0D28HQVG3 under `deletedLandingAsinInfo`.
+- Open concern: confirm whether `debug_html` works without authentication in production (scraping-proxy exposure).
